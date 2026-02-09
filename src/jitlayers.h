@@ -136,12 +136,12 @@ struct PrintOptions {
     bool print_before_all = false;
     bool print_after_all = false;
     bool print_module_scope = false;
-    // TODO: Add print_changed support. This would require integrating with LLVM's
-    // ChangedIRPrinter infrastructure to print IR only when passes modify it.
-    // See llvm/Passes/StandardInstrumentations.h for PrintChangedIRData.
-    std::string print_before;  // specific pass name
-    std::string print_after;   // specific pass name
+    // TODO: Add print_changed support using LLVM's ChangeReporter (a text diff).
+    // See https://llvm.org/doxygen/classllvm_1_1ChangeReporter.html
+    SmallVector<std::string, 1> print_before;  // specific pass names (comma-separated or repeated)
+    SmallVector<std::string, 1> print_after;   // specific pass names (comma-separated or repeated)
     std::string filter_print_funcs;  // filter for function names
+    std::string error;  // error messages from parsing
     raw_ostream *out = nullptr; // output stream (default: errs())
 
     PrintOptions() JL_NOTSAFEPOINT = default;

@@ -96,6 +96,32 @@ end # module ReflectionTest
     code_llvm(io, +, (Int, Int); llvm_options="-print-after=AfterOptimization -print-module-scope")
     output = String(take!(io))
     @test occursin("ModuleID", output) || occursin("source_filename", output)
+
+    # Test comma-separated pass names
+    io = IOBuffer()
+    code_llvm(io, +, (Int, Int); llvm_options="-print-after=BeforeOptimization,AfterOptimization")
+    output = String(take!(io))
+    @test occursin("IR Dump After BeforeOptimizationMarkerPass", output)
+    @test occursin("IR Dump After AfterOptimizationMarkerPass", output)
+
+    # Test repeated flags accumulate
+    io = IOBuffer()
+    code_llvm(io, +, (Int, Int); llvm_options="-print-after=BeforeOptimization -print-after=AfterOptimization")
+    output = String(take!(io))
+    @test occursin("IR Dump After BeforeOptimizationMarkerPass", output)
+    @test occursin("IR Dump After AfterOptimizationMarkerPass", output)
+
+    # Test unknown option warning appears in output
+    io = IOBuffer()
+    code_llvm(io, +, (Int, Int); llvm_options="-unknown-flag")
+    output = String(take!(io))
+    @test occursin("Warning: unknown llvm_options flag", output)
+
+    # Test missing value warning appears in output
+    io = IOBuffer()
+    code_llvm(io, +, (Int, Int); llvm_options="-print-after")
+    output = String(take!(io))
+    @test occursin("Warning: -print-after requires a value", output)
 end
 
 # isbits, isbitstype

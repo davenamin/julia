@@ -767,9 +767,19 @@ void parseLLVMOptions(const char *options, PrintOptions &out) JL_NOTSAFEPOINT {
             if (idx + 1 < Argv.size()) {
                 return StringRef(Argv[++idx]);
             }
-            errs() << "Warning: " << optionName << " requires a value\n";
+            raw_string_ostream errs(out.error);
+            errs << "Warning: " << optionName << " requires a value\n";
         }
         return StringRef();
+    };
+
+    // Helper to split a comma-separated value and append to a vector
+    auto addCommaSeparated = [](SmallVector<std::string, 1> &vec, StringRef val) JL_NOTSAFEPOINT {
+        SmallVector<StringRef, 4> parts;
+        val.split(parts, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+        for (auto &part : parts) {
+            vec.push_back(part.str());
+        }
     };
 
     // Process each token
@@ -783,13 +793,14 @@ void parseLLVMOptions(const char *options, PrintOptions &out) JL_NOTSAFEPOINT {
         } else if (Arg == "-print-module-scope") {
             out.print_module_scope = true;
         } else if (StringRef val = getNextValue(i, Arg, "-print-after="); !val.empty()) {
-            out.print_after = val.str();
+            addCommaSeparated(out.print_after, val);
         } else if (StringRef val = getNextValue(i, Arg, "-print-before="); !val.empty()) {
-            out.print_before = val.str();
+            addCommaSeparated(out.print_before, val);
         } else if (StringRef val = getNextValue(i, Arg, "-filter-print-funcs="); !val.empty()) {
             out.filter_print_funcs = val.str();
         } else {
-            errs() << "Warning: unknown llvm_options flag: " << Arg << "\n";
+            raw_string_ostream errs(out.error);
+            errs << "Warning: unknown llvm_options flag: " << Arg << "\n";
         }
     }
 }
@@ -854,15 +865,30 @@ void NewPM::run(Module &M) {
 
     // Register print callbacks if print options are set
     raw_ostream &OS = print_options.out ? *print_options.out : errs();
+
+    // Print any errors from option parsing
+    if (!print_options.error.empty()) {
+        OS << print_options.error;
+    }
+
     bool should_print = print_options.print_before_all || print_options.print_after_all ||
                         !print_options.print_before.empty() || !print_options.print_after.empty();
+
+    // Helper to check if PassID matches any name in a list
+    auto matchesAny = [](StringRef PassID, const SmallVector<std::string, 1> &names) JL_NOTSAFEPOINT -> bool {
+        for (const auto &name : names) {
+            if (PassID.contains(name))
+                return true;
+        }
+        return false;
+    };
 
     if (should_print) {
         if (print_options.print_before_all || !print_options.print_before.empty()) {
             PIC.registerBeforeNonSkippedPassCallback(
-                [this, &OS, &M](StringRef PassID, Any IR) {
+                [this, &OS, &M, &matchesAny](StringRef PassID, Any IR) {
                     bool should_print_pass = print_options.print_before_all ||
-                        PassID.contains(print_options.print_before);
+                        matchesAny(PassID, print_options.print_before);
                     if (!should_print_pass)
                         return;
 
@@ -885,9 +911,9 @@ void NewPM::run(Module &M) {
 
         if (print_options.print_after_all || !print_options.print_after.empty()) {
             PIC.registerAfterPassCallback(
-                [this, &OS, &M](StringRef PassID, Any IR, const PreservedAnalyses &) {
+                [this, &OS, &M, &matchesAny](StringRef PassID, Any IR, const PreservedAnalyses &) {
                     bool should_print_pass = print_options.print_after_all ||
-                        PassID.contains(print_options.print_after);
+                        matchesAny(PassID, print_options.print_after);
                     if (!should_print_pass)
                         return;
 

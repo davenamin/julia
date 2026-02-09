@@ -2657,7 +2657,7 @@ void jl_get_llvmf_defn_impl(jl_llvmf_dump_t *dump, jl_method_instance_t *mi, jl_
                     //Safe b/c context lock is held by output
                     PM.run(*m.getModuleUnlocked());
                     assert(!verifyLLVMIR(*m.getModuleUnlocked()));
-                    // Capture pass output (caller frees with jl_free_llvmf_pass_output)
+                    // Capture pass output (freed by jl_dump_function_ir or jl_dump_function_asm)
                     if (!pass_output_buffer.empty()) {
                         dump->pass_output = strdup(pass_output_buffer.c_str());
                     }

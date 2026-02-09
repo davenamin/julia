@@ -282,7 +282,7 @@ end
 struct LLVMFDump
     tsm::Ptr{Cvoid} # opaque
     f::Ptr{Cvoid} # opaque
-    pass_output::Cstring # LLVM pass instrumentation output (lifetime managed by jl_dump_function_ir)
+    pass_output::Cstring # LLVM pass instrumentation output (lifetime managed by jl_dump_function_ir or jl_dump_function_asm)
 end
 
 function _dump_function_native_assembly(mi::Core.MethodInstance, src::Core.CodeInfo,
@@ -330,8 +330,8 @@ The `llvm_options` keyword argument allows passing LLVM options to control the o
 Supported options include:
 - `-print-after-all`: Print IR after each pass
 - `-print-before-all`: Print IR before each pass
-- `-print-after=<passname>`: Print IR after a specific pass (e.g., `-print-after=InstCombinePass`)
-- `-print-before=<passname>`: Print IR before a specific pass
+- `-print-after=<passname>`: Print IR after a specific pass (e.g., `-print-after=InstCombinePass`). Comma-separated lists and repeated flags are supported.
+- `-print-before=<passname>`: Print IR before a specific pass. Comma-separated lists and repeated flags are supported.
 - `-print-module-scope`: Print entire module instead of just the function
 - `-filter-print-funcs=<name>`: Only print IR for functions matching the name
 
