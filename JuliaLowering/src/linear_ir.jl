@@ -309,7 +309,7 @@ function emit_break(ctx, ex)
     target = get(ctx.break_targets, name, nothing)
     if isnothing(target)
         if name == "loop_exit"
-            throw(LoweringError(ex, "`break` must be used inside a `while` or `for` loop"))
+            throw(LoweringError(ex, "`break` must be used inside a `while`, `for` loop, or `@label` block"))
         elseif name == "loop_cont"
             throw(LoweringError(ex, "`continue` must be used inside a `while` or `for` loop"))
         elseif endswith(name, "#cont")
@@ -697,40 +697,24 @@ function compile(ctx::LinearIRContext, ex, needs_value, in_tail_pos)
             end
             res
         end
-    elseif k == K"break_block"
-        end_label = make_label(ctx, ex)
-        name = ex[1].name_val
-        outer_target = get(ctx.break_targets, name, nothing)
-        # Inherit result_var from outer symbolicblock if present
-        outer_result_var = isnothing(outer_target) ? nothing : outer_target.result_var
-        ctx.break_targets[name] = JumpTarget(end_label, ctx, outer_result_var)
-        compile(ctx, ex[2], false, false)
-        if isnothing(outer_target)
-            delete!(ctx.break_targets, name)
-        else
-            ctx.break_targets[name] = outer_target
-        end
-        emit(ctx, end_label)
-        if needs_value
-            compile(ctx, nothing_(ctx, ex), needs_value, in_tail_pos)
-        end
     elseif k == K"symbolicblock"
         name = ex[1].name_val
-        if haskey(ctx.symbolic_jump_targets, name) || name in ctx.symbolic_block_labels
-            throw(LoweringError(ex, "Label `$name` defined multiple times"))
+        # Skip duplicate check for default-scope labels (loop_exit, loop_cont) which allow nesting
+        if name != "loop_exit" && name != "loop_cont"
+            if haskey(ctx.symbolic_jump_targets, name) || name in ctx.symbolic_block_labels
+                throw(LoweringError(ex, "Label `$name` defined multiple times"))
+            end
+            push!(ctx.symbolic_block_labels, name)
         end
-        push!(ctx.symbolic_block_labels, name)
         end_label = make_label(ctx, ex)
-        result_var = if needs_value || in_tail_pos
-            rv = new_local_binding(ctx, ex, "$(name)_result")
-            emit_assignment(ctx, ex, rv, nothing_(ctx, ex))
-            rv
-        else
-            nothing
+        need_value = needs_value || in_tail_pos
+        result_var = need_value ? new_local_binding(ctx, ex, "$(name)_result") : nothing
+        if !isnothing(result_var)
+            emit_assignment(ctx, ex, result_var, nothing_(ctx, ex))
         end
         outer_target = get(ctx.break_targets, name, nothing)
         ctx.break_targets[name] = JumpTarget(end_label, ctx, result_var)
-        body_val = compile(ctx, ex[2], !isnothing(result_var), false)
+        body_val = compile(ctx, ex[2], need_value, false)
         if !isnothing(result_var) && !isnothing(body_val)
             emit_assignment(ctx, ex, result_var, body_val)
         end
@@ -743,7 +727,7 @@ function compile(ctx::LinearIRContext, ex, needs_value, in_tail_pos)
         if in_tail_pos
             emit_return(ctx, ex, result_var)
             nothing
-        else
+        elseif needs_value
             result_var
         end
     elseif k == K"break"
