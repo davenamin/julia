@@ -524,8 +524,13 @@ export IPHONEOS_DEPLOYMENT_TARGET=$(IOS_VERSION_MIN)
 # Force these settings for iOS
 USECLANG := 1
 USEGCC := 0
-HOSTCC ?= cc
-HOSTCXX ?= c++
+# Host tools (like LLVM tblgen) must be built with the macOS SDK, not the iOS
+# SDK.  Use := (immediate) to override the delayed-expansion HOSTCC set earlier.
+MACOS_SDK := $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)
+HOSTCC := $(shell xcrun --sdk macosx -f clang)
+HOSTCXX := $(shell xcrun --sdk macosx -f clang++)
+HOST_CFLAGS := -isysroot $(MACOS_SDK)
+HOST_CXXFLAGS := -isysroot $(MACOS_SDK)
 endif
 
 # Set to 1 to enable profiling with perf
