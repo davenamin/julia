@@ -520,7 +520,12 @@ CXX += $(IOS_TARGET_FLAGS)
 FC := false
 # iOS doesn't support executables from user builds
 EXE :=
-export IPHONEOS_DEPLOYMENT_TARGET=$(IOS_VERSION_MIN)
+# Do NOT export IPHONEOS_DEPLOYMENT_TARGET globally — it leaks into native
+# host-tool builds (e.g. LLVM tblgen) and causes clang to target iPhone even
+# when using the macOS sysroot.  CMake already receives the deployment target
+# via -DCMAKE_OSX_DEPLOYMENT_TARGET; individual dep recipes that need the
+# environment variable can set it locally.
+IPHONEOS_DEPLOYMENT_TARGET := $(IOS_VERSION_MIN)
 # Force these settings for iOS
 USECLANG := 1
 USEGCC := 0
