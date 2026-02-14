@@ -115,6 +115,15 @@ endif
 ifeq ($(OS), emscripten)
 LLVM_CMAKE += -DCMAKE_TOOLCHAIN_FILE=$(EMSCRIPTEN)/cmake/Modules/Platform/Emscripten.cmake -DLLVM_INCLUDE_TOOLS=OFF -DLLVM_BUILD_TOOLS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_ENABLE_THREADS=OFF -DLLVM_BUILD_UTILS=OFF
 endif # OS == emscripten
+ifeq ($(IOS), 1)
+# Use LLVM's own iOS CMake toolchain file; it sets up the correct SDK,
+# deployment target, and platform flags so that CMake does not inject
+# -mmacosx-version-min (which conflicts with -mios-version-min).
+LLVM_CMAKE += -DCMAKE_TOOLCHAIN_FILE=$(SRCCACHE)/$(LLVM_SRC_DIR)/llvm/cmake/platforms/iOS.cmake
+LLVM_CMAKE += -DCMAKE_OSX_SYSROOT=$(IOS_SDK)
+LLVM_CMAKE += -DCMAKE_OSX_ARCHITECTURES=arm64
+LLVM_CMAKE += -DCMAKE_OSX_DEPLOYMENT_TARGET=$(IOS_VERSION_MIN)
+endif # IOS
 ifeq ($(USE_LLVM_SHLIB),1)
 # NOTE: we could also --disable-static here (on the condition we link tools
 #       against libLLVM) but there doesn't seem to be a CMake counterpart option
