@@ -268,6 +268,11 @@ USE_GPL_LIBS ?= 1
 # Whether to install Julia as a framework on Darwin (Apple) platforms.
 DARWIN_FRAMEWORK ?= 0
 
+# Whether to build Julia as a shared library for iOS.
+# Set IOS=1 to cross-compile for iOS (arm64).
+# Requires Xcode and the iOS SDK to be installed.
+IOS ?= 0
+
 # Override in Make.user to customize the framework:
 FRAMEWORK_NAME ?= Julia
 FRAMEWORK_VERSION ?= $(JULIA_MAJOR_VERSION).$(JULIA_MINOR_VERSION)
@@ -495,6 +500,34 @@ fPIC := -fPIC
 EXE :=
 endif
 
+# iOS cross-compilation configuration
+ifeq ($(IOS), 1)
+override OS := Darwin
+override ARCH := aarch64
+APPLE_ARCH := arm64
+IOS_VERSION_MIN ?= 14.0
+IOS_SDK := $(shell xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
+ifeq ($(IOS_SDK),)
+$(error iOS SDK not found. Ensure Xcode and iOS SDK are installed.)
+endif
+# Use clang from Xcode for iOS
+CC := $(shell xcrun --sdk iphoneos -f clang)
+CXX := $(shell xcrun --sdk iphoneos -f clang++)
+# iOS target flags
+IOS_TARGET_FLAGS := -arch arm64 -isysroot $(IOS_SDK) -mios-version-min=$(IOS_VERSION_MIN) -DJL_IOS -DTARGET_OS_IPHONE=1 -fembed-bitcode-marker
+CC += $(IOS_TARGET_FLAGS)
+CXX += $(IOS_TARGET_FLAGS)
+FC := false
+# iOS doesn't support executables from user builds
+EXE :=
+export IPHONEOS_DEPLOYMENT_TARGET=$(IOS_VERSION_MIN)
+# Force these settings for iOS
+USECLANG := 1
+USEGCC := 0
+HOSTCC ?= cc
+HOSTCXX ?= c++
+endif
+
 # Set to 1 to enable profiling with perf
 ifeq ("$(OS)", "Linux")
 USE_PERF_JITEVENTS ?= 1
@@ -542,11 +575,13 @@ FC := $(CROSS_COMPILE)gfortran
 
 # Note: Supporting only macOS Mojave and above
 ifeq ($(OS), Darwin)
+ifneq ($(IOS), 1)
 APPLE_ARCH := $(shell uname -m)
 ifneq ($(APPLE_ARCH),arm64)
 MACOSX_VERSION_MIN := 10.14
 else
 MACOSX_VERSION_MIN := 11.0
+endif
 endif
 endif
 
@@ -607,11 +642,13 @@ SHIPFLAGS  := $(SHIPFLAGS_CLANG) $(BOLT_CFLAGS_CLANG)
 BOLT_CFLAGS  := $(BOLT_CFLAGS_CLANG)
 
 ifeq ($(OS), Darwin)
+ifneq ($(IOS), 1)
 CC += -mmacosx-version-min=$(MACOSX_VERSION_MIN)
 CXX += -mmacosx-version-min=$(MACOSX_VERSION_MIN)
 FC += -mmacosx-version-min=$(MACOSX_VERSION_MIN)
 # export MACOSX_DEPLOYMENT_TARGET so that ld picks it up, especially for deps
 export MACOSX_DEPLOYMENT_TARGET=$(MACOSX_VERSION_MIN)
+endif
 endif
 endif
 
@@ -1033,7 +1070,11 @@ endif
 
 #If nothing is set default to native unless we are cross-compiling
 ifeq ($(MARCH)$(MCPU)$(MTUNE)$(JULIA_CPU_TARGET)$(XC_HOST),)
-ifeq ($(ARCH),aarch64)
+ifeq ($(IOS), 1)
+# iOS is always cross-compiled, use apple-m1 as a reasonable default
+MCPU=apple-m1
+JULIA_CPU_TARGET ?= apple-m1
+else ifeq ($(ARCH),aarch64)
 # ARM recommends only setting MCPU for AArch64
 MCPU=native
 else ifneq (,$(findstring riscv64,$(ARCH)))
@@ -1550,6 +1591,12 @@ WHOLE_ARCHIVE := -Xlinker -all_load
 NO_WHOLE_ARCHIVE :=
 HAVE_SSP := 1
 JLIBLDFLAGS += -Wl,-compatibility_version,$(SOMAJOR) -Wl,-current_version,$(JULIA_MAJOR_VERSION).$(JULIA_MINOR_VERSION).$(JULIA_PATCH_VERSION)
+ifeq ($(IOS), 1)
+OSLIBS += -framework UIKit -framework Security
+JCPPFLAGS += -DJL_IOS=1
+# iOS uses the same linker flags but with the iOS SDK
+JLDFLAGS += -arch arm64 -isysroot $(IOS_SDK) -mios-version-min=$(IOS_VERSION_MIN)
+endif
 endif
 
 ifeq ($(OS), WINNT)

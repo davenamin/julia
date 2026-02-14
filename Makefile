@@ -600,6 +600,9 @@ app:
 darwinframework:
 	$(MAKE) -C $(JULIAHOME)/contrib/mac/framework
 
+ios-framework:
+	$(MAKE) -C $(JULIAHOME)/contrib/ios IOS=1 framework
+
 light-source-dist.tmp: $(BUILDROOT)/doc/_build/html/en/index.html
 ifneq ($(BUILDROOT),$(JULIAHOME))
 	$(error make light-source-dist does not work in out-of-tree builds)

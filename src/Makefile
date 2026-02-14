@@ -184,7 +184,10 @@ endif
 CLANG_LDFLAGS := $(LLVM_LDFLAGS)
 ifeq ($(OS), Darwin)
 CLANG_LDFLAGS += -Wl,-undefined,dynamic_lookup
+ifneq ($(IOS), 1)
+# These dyld fork hooks are not available on iOS
 OSLIBS += -Wl,-U,__dyld_atfork_parent -Wl,-U,__dyld_atfork_prepare -Wl,-U,__dyld_dlopen_atfork_parent -Wl,-U,__dyld_dlopen_atfork_prepare
+endif
 LIBJULIA_PATH_REL := @rpath/libjulia
 else
 LIBJULIA_PATH_REL := libjulia

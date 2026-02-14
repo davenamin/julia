@@ -26,6 +26,9 @@ LOADER_LDFLAGS += -Wl,--no-as-needed -ldl -lpthread -rdynamic -lc -Wl,--as-neede
 else ifeq ($(OS),OpenBSD)
 LOADER_LDFLAGS += -Wl,--no-as-needed -lpthread -rdynamic -lc -Wl,--as-needed
 endif
+ifeq ($(IOS), 1)
+LOADER_LDFLAGS += -arch arm64 -isysroot $(IOS_SDK) -mios-version-min=$(IOS_VERSION_MIN)
+endif
 
 # Build list of dependent libraries that must be opened
 SHIPFLAGS  += -DDEP_LIBS=$(call shell_escape,$(call c_escape,$(LOADER_BUILD_DEP_LIBS)))
@@ -52,7 +55,12 @@ endif
 
 default: release
 all: release debug
+ifeq ($(IOS), 1)
+# On iOS, we only build the shared library, not the executable
+release debug :  % : libjulia-%
+else
 release debug :  % : julia-% libjulia-%
+endif
 
 $(BUILDDIR)/loader_lib.o : $(SRCDIR)/loader_lib.c $(HEADERS) $(JULIAHOME)/VERSION
 	@$(call PRINT_CC, $(CC) -DJL_LIBRARY_EXPORTS $(SHIPFLAGS) $(LOADER_CFLAGS) -c $< -o $@)
