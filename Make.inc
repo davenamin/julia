@@ -650,6 +650,12 @@ CXX += -mmacosx-version-min=$(MACOSX_VERSION_MIN)
 FC += -mmacosx-version-min=$(MACOSX_VERSION_MIN)
 # export MACOSX_DEPLOYMENT_TARGET so that ld picks it up, especially for deps
 export MACOSX_DEPLOYMENT_TARGET=$(MACOSX_VERSION_MIN)
+else
+# Ensure MACOSX_DEPLOYMENT_TARGET does not leak from the user's environment
+# into dependency builds (e.g. CMake), which would cause conflicting
+# -mmacosx-version-min and -mios-version-min flags.
+unexport MACOSX_DEPLOYMENT_TARGET
+override MACOSX_DEPLOYMENT_TARGET=
 endif
 endif
 endif
