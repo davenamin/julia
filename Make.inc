@@ -571,7 +571,9 @@ USECLANG := 0
 USEGCC := 1
 endif
 
+ifneq ($(IOS), 1)
 FC := $(CROSS_COMPILE)gfortran
+endif
 
 # Note: Supporting only macOS Mojave and above
 ifeq ($(OS), Darwin)
@@ -650,6 +652,13 @@ FC += -mmacosx-version-min=$(MACOSX_VERSION_MIN)
 export MACOSX_DEPLOYMENT_TARGET=$(MACOSX_VERSION_MIN)
 endif
 endif
+endif
+
+# Re-apply iOS compiler and target flags after compiler detection,
+# since the USECLANG/USEGCC blocks above override CC/CXX.
+ifeq ($(IOS), 1)
+CC := $(shell xcrun --sdk iphoneos -f clang) $(IOS_TARGET_FLAGS)
+CXX := $(shell xcrun --sdk iphoneos -f clang++) $(IOS_TARGET_FLAGS)
 endif
 
 # Conditional setting of RELRO flag for enhanced security on Linux builds.
