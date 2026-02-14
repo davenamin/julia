@@ -44,6 +44,15 @@ CMAKE_CXX := "$$(which $(CXX_BASE))"
 CMAKE_CC_ARG := $(CC_ARG)
 CMAKE_CXX_ARG := $(CXX_ARG)
 endif
+# For iOS, cmake's native cross-compilation support (CMAKE_SYSTEM_NAME=iOS,
+# CMAKE_OSX_SYSROOT, CMAKE_OSX_ARCHITECTURES, CMAKE_OSX_DEPLOYMENT_TARGET)
+# handles -isysroot, -arch, and deployment-target flags.  Strip those from
+# CMAKE_C_COMPILER_ARG1 to avoid duplicating / conflicting with cmake's own
+# flags.  Keep only -D defines (e.g. -DJL_IOS, -DTARGET_OS_IPHONE=1).
+ifeq ($(IOS),1)
+CMAKE_CC_ARG := $(filter -D%,$(CMAKE_CC_ARG))
+CMAKE_CXX_ARG := $(filter -D%,$(CMAKE_CXX_ARG))
+endif
 CMAKE_COMMON += -DCMAKE_C_COMPILER=$(CMAKE_CC)
 ifneq ($(strip $(CMAKE_CC_ARG)),)
 CMAKE_COMMON += -DCMAKE_C_COMPILER_ARG1="$(CMAKE_CC_ARG) $(SANITIZE_OPTS)"
