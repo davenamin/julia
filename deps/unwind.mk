@@ -117,10 +117,16 @@ $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/libunwind/llvm-libunwind-freebsd-libg
 	cd $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/libunwind && patch -p2 -f < $(SRCDIR)/patches/llvm-libunwind-freebsd-libgcc-api-compat.patch
 	echo 1 > $@
 
+# Patch HandleLLVMOptions.cmake so that -Wl,-z,defs is not added for
+# iOS (Apple's ld64 does not understand the -z flag).
+$(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/llvm-ios-no-z-defs.patch-applied: $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/libunwind/llvm-libunwind-freebsd-libgcc-api-compat.patch-applied
+	cd $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER) && patch -p1 -f < $(SRCDIR)/patches/llvm-ios-no-z-defs.patch
+	echo 1 > $@
+
 checksum-llvmunwind: $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER).tar.xz
 	$(JLCHECKSUM) $<
 
-$(BUILDDIR)/llvmunwind-$(LLVMUNWIND_VER)/build-configured: $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/source-extracted $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/libunwind/llvm-libunwind-freebsd-libgcc-api-compat.patch-applied
+$(BUILDDIR)/llvmunwind-$(LLVMUNWIND_VER)/build-configured: $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/source-extracted $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/llvm-ios-no-z-defs.patch-applied
 	mkdir -p $(dir $@)
 	cd $(dir $@) && \
 	$(CMAKE) $(dir $<) -S $(dir $<)/runtimes $(LLVMUNWIND_OPTS)

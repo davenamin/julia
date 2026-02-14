@@ -246,6 +246,9 @@ endef
 ifeq ($(shell test $(LLVM_VER_MAJ) -lt 19 && echo true),true)
 $(eval $(call LLVM_PATCH,llvm-ittapi-cmake))
 endif
+# Exclude iOS (and other Apple embedded platforms) from -Wl,-z,defs in
+# HandleLLVMOptions.cmake; Apple's ld64 does not support the -z flag.
+$(eval $(call LLVM_PROJ_PATCH,llvm-ios-no-z-defs))
 
 ifeq ($(USE_SYSTEM_ZLIB), 0)
 $(LLVM_BUILDDIR_withtype)/build-configured: | $(build_prefix)/manifest/zlib
