@@ -514,7 +514,7 @@ endif
 CC := $(shell xcrun --sdk iphoneos -f clang)
 CXX := $(shell xcrun --sdk iphoneos -f clang++)
 # iOS target flags
-IOS_TARGET_FLAGS := -arch arm64 -isysroot $(IOS_SDK) -mios-version-min=$(IOS_VERSION_MIN) -DJL_IOS -DTARGET_OS_IPHONE=1 -fembed-bitcode-marker
+IOS_TARGET_FLAGS := -arch arm64 -isysroot $(IOS_SDK) -mios-version-min=$(IOS_VERSION_MIN) -DJL_IOS -DTARGET_OS_IPHONE=1
 CC += $(IOS_TARGET_FLAGS)
 CXX += $(IOS_TARGET_FLAGS)
 FC := false
