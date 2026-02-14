@@ -1412,6 +1412,10 @@ endif
 
 # BinaryBuilder options.  We default to "on" for all the projects listed in BB_PROJECTS,
 # but only if contrib/normalize_triplet.py works for our requested triplet.
+ifeq ($(IOS), 1)
+# No BinaryBuilder pre-built artifacts are available for iOS; build all deps from source.
+USE_BINARYBUILDER := 0
+else
 ifeq ($(shell $(call invoke_python,$(JULIAHOME)/contrib/normalize_triplet.py) $(or $(XC_HOST),$(XC_HOST),$(BUILD_MACHINE)) >/dev/null 2>/dev/null; echo $$?),0)
 USE_BINARYBUILDER ?= 1
 else
@@ -1419,6 +1423,7 @@ ifneq ($(shell $(call invoke_python,$(JULIAHOME)/contrib/normalize_triplet.py) x
 $(warning normalize_triplet.py appears to be non-functional (used python interpreter "$(PYTHON)"), so BinaryBuilder disabled)
 endif
 USE_BINARYBUILDER ?= 0
+endif
 endif
 
 # Auto-detect triplet once, create different versions that we use as defaults below for each BB install target
@@ -1479,9 +1484,12 @@ $(foreach proj,$(BB_PROJECTS),$(eval $(call SET_BB_DEFAULT,$(proj))))
 
 
 # Warn if the user tries to build something that requires `gfortran` but they don't have it installed.
+# iOS builds don't use gfortran (OpenBLAS/SuiteSparse are built from source with clang).
+ifneq ($(IOS),1)
 ifeq ($(FC_VERSION),)
 ifneq ($(USE_BINARYBUILDER_OPENBLAS)$(USE_BINARYBUILDER_LIBSUITESPARSE),11)
 $(error "Attempting to build OpenBLAS or SuiteSparse without a functioning fortran compiler!")
+endif
 endif
 endif
 
