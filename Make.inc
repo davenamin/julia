@@ -536,6 +536,7 @@ HOSTCC := $(shell xcrun --sdk macosx -f clang)
 HOSTCXX := $(shell xcrun --sdk macosx -f clang++)
 HOST_CFLAGS := -isysroot $(MACOS_SDK)
 HOST_CXXFLAGS := -isysroot $(MACOS_SDK)
+USE_CROSS_FLISP := 1
 endif
 
 # Set to 1 to enable profiling with perf
@@ -1410,6 +1411,23 @@ else
   UTF8PROC_INC := $(build_includedir)
 endif
 
+# When building host tools during cross-compilation (e.g. flisp for iOS),
+# override the compiler and flags to target the build machine instead of the
+# cross-compilation target.  This block must appear after all architecture-
+# and OS-specific flag additions so that it can cleanly replace them.
+ifeq ($(BUILDING_HOST_TOOLS), 1)
+ifeq ($(IOS), 1)
+CC := $(HOSTCC)
+CXX := $(HOSTCXX)
+# Reset flags that may contain target-specific options (e.g. -mcrc for
+# aarch64) which are invalid for the host compiler when host != target.
+JCFLAGS := $(JCFLAGS_CLANG)
+JCPPFLAGS := $(JCPPFLAGS_CLANG)
+JCXXFLAGS := $(JCXXFLAGS_CLANG)
+LDFLAGS :=
+endif
+endif
+
 # We need python for things like BB triplet recognition.  We don't really care
 # about version, generally, so just find something that works:
 PYTHON := $(shell which python 2>/dev/null || which python3 2>/dev/null || which python2 2>/dev/null || echo not found)
@@ -1625,10 +1643,12 @@ NO_WHOLE_ARCHIVE :=
 HAVE_SSP := 1
 JLIBLDFLAGS += -Wl,-compatibility_version,$(SOMAJOR) -Wl,-current_version,$(JULIA_MAJOR_VERSION).$(JULIA_MINOR_VERSION).$(JULIA_PATCH_VERSION)
 ifeq ($(IOS), 1)
+ifneq ($(BUILDING_HOST_TOOLS), 1)
 OSLIBS += -framework UIKit -framework Security
 JCPPFLAGS += -DJL_IOS=1
 # iOS uses the same linker flags but with the iOS SDK
 JLDFLAGS += -arch arm64 -isysroot $(IOS_SDK) -mios-version-min=$(IOS_VERSION_MIN)
+endif
 endif
 endif
 

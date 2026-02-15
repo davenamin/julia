@@ -61,6 +61,14 @@ $(foreach link,base $(JULIAHOME)/test,$(eval $(call symlink_target,$(link),$$(bu
 julia_flisp.boot.inc.phony: julia-deps
 	@$(MAKE) $(QUIET_MAKE) -C $(BUILDROOT)/src julia_flisp.boot.inc.phony
 
+# When cross-compiling, host-native versions of flisp's library dependencies
+# (libuv, utf8proc) must be built before the host flisp executable can link.
+ifeq ($(USE_CROSS_FLISP), 1)
+julia_flisp.boot.inc.phony: | julia-host-deps
+julia-host-deps: julia-deps
+	@$(MAKE) $(QUIET_MAKE) -C $(BUILDROOT)/deps install-host-libuv install-host-utf8proc
+endif
+
 # Build the HTML docs (skipped if already exists, notably in tarballs)
 $(BUILDROOT)/doc/_build/html/en/index.html: $(shell find $(BUILDROOT)/base $(BUILDROOT)/doc \( -path $(BUILDROOT)/doc/_build -o -path $(BUILDROOT)/doc/deps -o -name *_constants.jl -o -name *_h.jl -o -name version_git.jl \) -prune -o -type f -print)
 	@$(MAKE) docs
