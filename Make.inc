@@ -1419,6 +1419,10 @@ ifeq ($(BUILDING_HOST_TOOLS), 1)
 ifeq ($(IOS), 1)
 CC := $(HOSTCC)
 CXX := $(HOSTCXX)
+# Provide the sysroot so that the host compiler (invoked by absolute path
+# via xcrun -f) can locate system headers (stdlib.h, etc.).
+CFLAGS := $(HOST_CFLAGS)
+CXXFLAGS := $(HOST_CXXFLAGS)
 # Reset flags that may contain target-specific options (e.g. -mcrc for
 # aarch64) which are invalid for the host compiler when host != target.
 JCFLAGS := $(JCFLAGS_CLANG)

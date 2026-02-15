@@ -80,7 +80,8 @@ $(HOST_LIBUV_BUILDDIR)/build-configured: $(SRCCACHE)/$(LIBUV_SRC_DIR)/source-ext
 	touch -c $(SRCCACHE)/$(LIBUV_SRC_DIR)/configure
 	mkdir -p $(dir $@)
 	cd $(dir $@) && \
-	CC="$(HOSTCC)" CFLAGS="$(HOST_CFLAGS) -O2" LDFLAGS="" \
+	CC="$(HOSTCC)" CXX="$(HOSTCXX)" \
+	CFLAGS="$(HOST_CFLAGS) -O2" CXXFLAGS="$(HOST_CXXFLAGS)" LDFLAGS="" \
 	$(SRCCACHE)/$(LIBUV_SRC_DIR)/configure --with-pic \
 		--prefix=$(abspath $(build_prefix)/host) \
 		--libdir=$(abspath $(build_prefix)/host/lib) \
