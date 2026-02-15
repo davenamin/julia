@@ -181,6 +181,21 @@ ifeq ($(OS), WINNT)
 RT_LLVMLINK += -luuid -lole32
 endif
 
+ifeq ($(IOS), 1)
+# iOS cross-compilation: llvm-config is built for iOS and cannot execute on
+# the macOS host, so the $(shell $(LLVM_CONFIG_HOST) ...) calls above return
+# empty strings. Override the LLVM variables with values derived from the
+# known build-prefix layout.
+LLVM_LDFLAGS := -L$(build_libdir)
+LLVM_CXXFLAGS := -I$(build_includedir) -std=c++17 -fno-exceptions -fno-rtti \
+    -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -DNDEBUG
+# Static LLVM libraries for libjulia-internal
+# (APInt-C, coverage, processor, runtime_ccall, gc-heap-snapshot use LLVMSupport)
+RT_LLVMLINK := $(LLVM_LDFLAGS) -lLLVMTargetParser -lLLVMSupport -lLLVMDemangle -lz
+# Shared LLVM library for libjulia-codegen
+CG_LLVMLINK := $(LLVM_LDFLAGS) -lLLVM
+endif # IOS
+
 CLANG_LDFLAGS := $(LLVM_LDFLAGS)
 ifeq ($(OS), Darwin)
 CLANG_LDFLAGS += -Wl,-undefined,dynamic_lookup
