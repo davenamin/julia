@@ -26,9 +26,10 @@ framework_destdirs := $(addprefix $(DESTDIR)$(prefix)/,$(IOS_FRAMEWORK_DIR) $(IO
 $(framework_destdirs):
 	mkdir -p $@
 
-# Build the Julia shared libraries first
+# Build the Julia shared libraries (skip sysimg — it requires running the Julia
+# executable, which is impossible during cross-compilation).
 build-julia:
-	$(MAKE) -C $(JULIAHOME) IOS=1
+	$(MAKE) -C $(JULIAHOME) IOS=1 julia-src-release
 
 # Generate Info.plist for the iOS framework
 $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)/Info.plist: | $(framework_destdirs)
