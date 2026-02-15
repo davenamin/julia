@@ -43,7 +43,12 @@ OPENBLAS_FFLAGS := $(JFFLAGS) $(USE_BLAS_FFLAGS)
 OPENBLAS_CFLAGS := -O2
 
 # Decide whether to build for 32-bit or 64-bit arch
-ifneq ($(XC_HOST),)
+ifeq ($(IOS),1)
+# iOS is always a cross-build.  Bake HOST_CFLAGS (macOS sysroot) into
+# HOSTCC so that OpenBLAS host tools (getarch) can find system headers;
+# on modern macOS bare clang cannot locate <stdio.h> without -isysroot.
+OPENBLAS_BUILD_OPTS += OSNAME=$(OS) CROSS=1 HOSTCC="$(HOSTCC) $(HOST_CFLAGS)" CROSS_SUFFIX=
+else ifneq ($(XC_HOST),)
 OPENBLAS_BUILD_OPTS += OSNAME=$(OS) CROSS=1 HOSTCC=$(HOSTCC) CROSS_SUFFIX=$(CROSS_COMPILE)
 endif
 ifeq ($(OS),WINNT)
