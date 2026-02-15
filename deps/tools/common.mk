@@ -73,6 +73,11 @@ CMAKE_COMMON += -DCMAKE_SYSTEM_NAME=iOS
 CMAKE_COMMON += -DCMAKE_OSX_SYSROOT=$(IOS_SDK)
 CMAKE_COMMON += -DCMAKE_OSX_ARCHITECTURES=arm64
 CMAKE_COMMON += -DCMAKE_OSX_DEPLOYMENT_TARGET=$(IOS_VERSION_MIN)
+# In cross-compilation mode CMake restricts find_*() calls to paths
+# under CMAKE_FIND_ROOT_PATH.  Add the Julia build prefix so that
+# deps installed earlier (e.g. OpenSSL) are visible to later deps
+# (e.g. libssh2, libgit2).
+CMAKE_COMMON += -DCMAKE_FIND_ROOT_PATH=$(build_prefix)
 endif
 
 # For now this is LLVM specific, but I expect it won't be in the future
