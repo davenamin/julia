@@ -1,5 +1,6 @@
 JULIAHOME := $(abspath ../..)
 include $(JULIAHOME)/Make.inc
+include $(JULIAHOME)/deps/llvm-ver.make
 
 # Build Julia as an iOS framework (shared library)
 # Usage: make -C contrib/ios IOS=1 framework
@@ -70,15 +71,56 @@ $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/$(IOS_FRAMEWORK_NAME).h: | $(framew
 install-headers: | $(framework_destdirs)
 	cp $(build_includedir)/julia/*.h $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/julia/
 
-# Copy the shared libraries into the framework
+# Shorthand for the framework output directory
+IOS_FWDIR = $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)
+
+# Copy all shared libraries into the framework and fix up install names so that
+# the framework is fully self-contained.
+#
+# Library layout inside the framework:
+#   Julia.framework/
+#     Julia                         <- main framework binary (libjulia)
+#     libjulia.$(JL_MAJOR_SHLIB_EXT) -> Julia   (versioned symlink)
+#     libjulia-internal.dylib
+#     libjulia-codegen.dylib
+#     libLLVM.dylib
+#     libunwind.dylib
+#     libz.dylib
+#
+# Install-name strategy:
+#   - Each library's LC_ID_DYLIB is set to @rpath/Julia.framework/<name>
+#     so that apps can link against the framework with the standard
+#     @executable_path/Frameworks rpath.
+#   - All intra-framework LC_LOAD_DYLIB references are rewritten from
+#     @rpath/<name> to @loader_path/<name> so that libraries within the
+#     framework find each other regardless of the app's rpath setup.
 install-libs: | $(framework_destdirs)
-	cp $(build_shlibdir)/libjulia.dylib $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)/$(IOS_FRAMEWORK_NAME)
-	@# Copy internal libraries alongside the framework binary
-	cp $(build_shlibdir)/libjulia-internal.dylib $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)/
-	cp $(build_shlibdir)/libjulia-codegen.dylib $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)/
-	@# Fix install names for iOS
-	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/$(IOS_FRAMEWORK_NAME) \
-		$(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)/$(IOS_FRAMEWORK_NAME)
+	@# --- Copy libraries (use -L to follow symlinks) ---
+	cp -fL $(build_shlibdir)/libjulia.$(JL_MAJOR_MINOR_SHLIB_EXT) $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME)
+	cp -fL $(build_shlibdir)/libjulia-internal.$(JL_MAJOR_MINOR_SHLIB_EXT) $(IOS_FWDIR)/libjulia-internal.dylib
+	cp -fL $(build_shlibdir)/libjulia-codegen.$(JL_MAJOR_MINOR_SHLIB_EXT) $(IOS_FWDIR)/libjulia-codegen.dylib
+	cp -fL $(build_shlibdir)/libLLVM.dylib $(IOS_FWDIR)/libLLVM.dylib
+	cp -fL $(build_shlibdir)/libunwind.dylib $(IOS_FWDIR)/libunwind.dylib
+	cp -fL $(build_shlibdir)/libz.dylib $(IOS_FWDIR)/libz.dylib
+	@# Versioned symlink: libjulia-internal and codegen reference the
+	@# versioned libjulia install name (@loader_path/libjulia.X.Y.dylib)
+	ln -sf $(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/libjulia.$(JL_MAJOR_SHLIB_EXT)
+	@# --- Rewrite @rpath/ references to @loader_path/ for intra-framework resolution ---
+	@for lib in $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/libjulia-internal.dylib \
+		    $(IOS_FWDIR)/libjulia-codegen.dylib $(IOS_FWDIR)/libLLVM.dylib \
+		    $(IOS_FWDIR)/libunwind.dylib $(IOS_FWDIR)/libz.dylib; do \
+		for dep in $$(otool -L $$lib 2>/dev/null | tail -n +2 | grep '@rpath/' | awk '{print $$1}'); do \
+			new=$$(echo $$dep | sed 's|@rpath/|@loader_path/|'); \
+			install_name_tool -change $$dep $$new $$lib 2>/dev/null || true; \
+		done; \
+	done
+	@# --- Set install name IDs (for linking from the app) ---
+	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/$(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME)
+	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/libjulia-internal.dylib $(IOS_FWDIR)/libjulia-internal.dylib
+	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/libjulia-codegen.dylib $(IOS_FWDIR)/libjulia-codegen.dylib
+	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/libLLVM.dylib $(IOS_FWDIR)/libLLVM.dylib
+	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/libunwind.dylib $(IOS_FWDIR)/libunwind.dylib
+	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/libz.dylib $(IOS_FWDIR)/libz.dylib
 
 # Codesign the framework
 codesign:
