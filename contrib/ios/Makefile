@@ -22,7 +22,7 @@ IOS_FRAMEWORK_DIR := $(IOS_FRAMEWORK_NAME).framework
 IOS_FRAMEWORK_HEADERS := $(IOS_FRAMEWORK_DIR)/Headers
 IOS_FRAMEWORK_MODULES := $(IOS_FRAMEWORK_DIR)/Modules
 
-framework_destdirs := $(addprefix $(DESTDIR)$(prefix)/,$(IOS_FRAMEWORK_DIR) $(IOS_FRAMEWORK_HEADERS) $(IOS_FRAMEWORK_HEADERS)/julia $(IOS_FRAMEWORK_MODULES))
+framework_destdirs := $(addprefix $(DESTDIR)$(prefix)/,$(IOS_FRAMEWORK_DIR) $(IOS_FRAMEWORK_HEADERS) $(IOS_FRAMEWORK_HEADERS)/julia $(IOS_FRAMEWORK_HEADERS)/julia/uv $(IOS_FRAMEWORK_MODULES))
 
 $(framework_destdirs):
 	mkdir -p $@
@@ -67,9 +67,10 @@ $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/$(IOS_FRAMEWORK_NAME).h: | $(framew
 	@echo '#include <$(IOS_FRAMEWORK_NAME)/julia/julia_version.h>' >> $@
 	@echo '#include <$(IOS_FRAMEWORK_NAME)/julia/uv.h>' >> $@
 
-# Copy public headers
+# Copy public headers (including uv/ subdirectory that uv.h #includes)
 install-headers: | $(framework_destdirs)
 	cp $(build_includedir)/julia/*.h $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/julia/
+	cp $(build_includedir)/julia/uv/*.h $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/julia/uv/
 
 # Shorthand for the framework output directory
 IOS_FWDIR = $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)
