@@ -506,15 +506,22 @@ override OS := Darwin
 override ARCH := aarch64
 APPLE_ARCH := arm64
 IOS_VERSION_MIN ?= 14.0
-IOS_SDK := $(shell xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
+# IOS_PLATFORM selects the target: iphoneos (device) or iphonesimulator
+IOS_PLATFORM ?= iphoneos
+IOS_SDK := $(shell xcrun --sdk $(IOS_PLATFORM) --show-sdk-path 2>/dev/null)
 ifeq ($(IOS_SDK),)
-$(error iOS SDK not found. Ensure Xcode and iOS SDK are installed.)
+$(error iOS SDK not found for platform '$(IOS_PLATFORM)'. Ensure Xcode and iOS SDK are installed.)
 endif
-# Use clang from Xcode for iOS
-CC := $(shell xcrun --sdk iphoneos -f clang)
-CXX := $(shell xcrun --sdk iphoneos -f clang++)
-# iOS target flags
-IOS_TARGET_FLAGS := -arch arm64 -isysroot $(IOS_SDK) -mios-version-min=$(IOS_VERSION_MIN) -DJL_IOS -DTARGET_OS_IPHONE=1
+# Use clang from Xcode for the selected platform
+CC := $(shell xcrun --sdk $(IOS_PLATFORM) -f clang)
+CXX := $(shell xcrun --sdk $(IOS_PLATFORM) -f clang++)
+# iOS target flags — use the correct version-min flag for device vs simulator
+ifeq ($(IOS_PLATFORM),iphonesimulator)
+IOS_VERSION_MIN_FLAG := -mios-simulator-version-min=$(IOS_VERSION_MIN)
+else
+IOS_VERSION_MIN_FLAG := -mios-version-min=$(IOS_VERSION_MIN)
+endif
+IOS_TARGET_FLAGS := -arch arm64 -isysroot $(IOS_SDK) $(IOS_VERSION_MIN_FLAG) -DJL_IOS -DTARGET_OS_IPHONE=1
 CC += $(IOS_TARGET_FLAGS)
 CXX += $(IOS_TARGET_FLAGS)
 FC := false
@@ -674,8 +681,8 @@ endif
 # Re-apply iOS compiler and target flags after compiler detection,
 # since the USECLANG/USEGCC blocks above override CC/CXX.
 ifeq ($(IOS), 1)
-CC := $(shell xcrun --sdk iphoneos -f clang) $(IOS_TARGET_FLAGS)
-CXX := $(shell xcrun --sdk iphoneos -f clang++) $(IOS_TARGET_FLAGS)
+CC := $(shell xcrun --sdk $(IOS_PLATFORM) -f clang) $(IOS_TARGET_FLAGS)
+CXX := $(shell xcrun --sdk $(IOS_PLATFORM) -f clang++) $(IOS_TARGET_FLAGS)
 endif
 
 # Conditional setting of RELRO flag for enhanced security on Linux builds.
@@ -1651,7 +1658,7 @@ ifneq ($(BUILDING_HOST_TOOLS), 1)
 OSLIBS += -framework UIKit -framework Security
 JCPPFLAGS += -DJL_IOS=1
 # iOS uses the same linker flags but with the iOS SDK
-JLDFLAGS += -arch arm64 -isysroot $(IOS_SDK) -mios-version-min=$(IOS_VERSION_MIN)
+JLDFLAGS += -arch arm64 -isysroot $(IOS_SDK) $(IOS_VERSION_MIN_FLAG)
 endif
 endif
 endif

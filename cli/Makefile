@@ -27,7 +27,7 @@ else ifeq ($(OS),OpenBSD)
 LOADER_LDFLAGS += -Wl,--no-as-needed -lpthread -rdynamic -lc -Wl,--as-needed
 endif
 ifeq ($(IOS), 1)
-LOADER_LDFLAGS += -arch arm64 -isysroot $(IOS_SDK) -mios-version-min=$(IOS_VERSION_MIN)
+LOADER_LDFLAGS += -arch arm64 -isysroot $(IOS_SDK) $(IOS_VERSION_MIN_FLAG)
 endif
 
 # Build list of dependent libraries that must be opened

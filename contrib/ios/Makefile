@@ -2,8 +2,25 @@ JULIAHOME := $(abspath ../..)
 include $(JULIAHOME)/Make.inc
 include $(JULIAHOME)/deps/llvm-ver.make
 
-# Build Julia as an iOS framework (shared library)
-# Usage: make -C contrib/ios IOS=1 framework
+# Build Julia as an iOS framework (shared library) or XCFramework.
+#
+# Single-platform framework (device or simulator):
+#   make -C contrib/ios IOS=1 framework
+#   make -C contrib/ios IOS=1 IOS_PLATFORM=iphonesimulator framework
+#
+# XCFramework (combines device + simulator):
+#   Requires two separate builds — one per platform — because the compiled
+#   binaries differ.  Use out-of-tree builds to keep them apart:
+#
+#     make O=build-ios-device configure
+#     make -C build-ios-device IOS=1 IOS_PLATFORM=iphoneos ios-framework
+#
+#     make O=build-ios-sim configure
+#     make -C build-ios-sim IOS=1 IOS_PLATFORM=iphonesimulator ios-framework
+#
+#     make -C contrib/ios IOS=1 xcframework \
+#       IOS_DEVICE_FRAMEWORK=build-ios-device/usr/share/julia/Julia.framework \
+#       IOS_SIM_FRAMEWORK=build-ios-sim/usr/share/julia/Julia.framework
 
 default: framework
 
@@ -22,6 +39,16 @@ IOS_FRAMEWORK_DIR := $(IOS_FRAMEWORK_NAME).framework
 IOS_FRAMEWORK_HEADERS := $(IOS_FRAMEWORK_DIR)/Headers
 IOS_FRAMEWORK_MODULES := $(IOS_FRAMEWORK_DIR)/Modules
 
+# XCFramework output
+IOS_XCFRAMEWORK_DIR := $(IOS_FRAMEWORK_NAME).xcframework
+
+# Platform name for Info.plist — iPhoneOS or iPhoneSimulator
+ifeq ($(IOS_PLATFORM),iphonesimulator)
+IOS_PLIST_PLATFORM := iPhoneSimulator
+else
+IOS_PLIST_PLATFORM := iPhoneOS
+endif
+
 framework_destdirs := $(addprefix $(DESTDIR)$(prefix)/,$(IOS_FRAMEWORK_DIR) $(IOS_FRAMEWORK_HEADERS) $(IOS_FRAMEWORK_HEADERS)/julia $(IOS_FRAMEWORK_HEADERS)/julia/uv $(IOS_FRAMEWORK_MODULES))
 
 $(framework_destdirs):
@@ -30,7 +57,7 @@ $(framework_destdirs):
 # Build the Julia shared libraries (skip sysimg — it requires running the Julia
 # executable, which is impossible during cross-compilation).
 build-julia:
-	$(MAKE) -C $(JULIAHOME) IOS=1 julia-src-release
+	$(MAKE) -C $(JULIAHOME) IOS=1 IOS_PLATFORM=$(IOS_PLATFORM) julia-src-release
 
 # Generate Info.plist for the iOS framework
 $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)/Info.plist: | $(framework_destdirs)
@@ -45,7 +72,7 @@ $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)/Info.plist: | $(framework_destdirs)
 	/usr/libexec/PlistBuddy -x -c "Add :CFBundleInfoDictionaryVersion string 6.0" $@
 	/usr/libexec/PlistBuddy -x -c "Add :MinimumOSVersion string $(IOS_VERSION_MIN)" $@
 	/usr/libexec/PlistBuddy -x -c "Add :CFBundleSupportedPlatforms array" $@
-	/usr/libexec/PlistBuddy -x -c "Add :CFBundleSupportedPlatforms:0 string iPhoneOS" $@
+	/usr/libexec/PlistBuddy -x -c "Add :CFBundleSupportedPlatforms:0 string $(IOS_PLIST_PLATFORM)" $@
 	/usr/libexec/PlistBuddy -x -c "Add :UIDeviceFamily array" $@
 	/usr/libexec/PlistBuddy -x -c "Add :UIDeviceFamily:0 integer 1" $@
 	/usr/libexec/PlistBuddy -x -c "Add :UIDeviceFamily:1 integer 2" $@
@@ -136,11 +163,41 @@ framework: build-julia \
 	$(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/$(IOS_FRAMEWORK_NAME).h \
 	install-headers install-libs codesign
 	@echo ""
-	@echo "iOS framework built successfully:"
+	@echo "iOS framework built successfully ($(IOS_PLATFORM)):"
 	@echo "  $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)"
+	@echo ""
+
+# XCFramework — combines pre-built device and simulator frameworks.
+#
+# Set IOS_DEVICE_FRAMEWORK and IOS_SIM_FRAMEWORK to the paths of the
+# respective Julia.framework directories.  See the top-of-file comment for the
+# recommended workflow using out-of-tree builds.
+IOS_DEVICE_FRAMEWORK ?=
+IOS_SIM_FRAMEWORK ?=
+
+xcframework:
+	@test -n "$(IOS_DEVICE_FRAMEWORK)" || \
+		{ echo "Error: IOS_DEVICE_FRAMEWORK not set." \
+		       "Set it to the path of the iphoneos Julia.framework."; exit 1; }
+	@test -n "$(IOS_SIM_FRAMEWORK)" || \
+		{ echo "Error: IOS_SIM_FRAMEWORK not set." \
+		       "Set it to the path of the iphonesimulator Julia.framework."; exit 1; }
+	@test -d "$(IOS_DEVICE_FRAMEWORK)" || \
+		{ echo "Error: device framework not found at $(IOS_DEVICE_FRAMEWORK)"; exit 1; }
+	@test -d "$(IOS_SIM_FRAMEWORK)" || \
+		{ echo "Error: simulator framework not found at $(IOS_SIM_FRAMEWORK)"; exit 1; }
+	rm -rf $(DESTDIR)$(prefix)/$(IOS_XCFRAMEWORK_DIR)
+	xcodebuild -create-xcframework \
+		-framework $(IOS_DEVICE_FRAMEWORK) \
+		-framework $(IOS_SIM_FRAMEWORK) \
+		-output $(DESTDIR)$(prefix)/$(IOS_XCFRAMEWORK_DIR)
+	@echo ""
+	@echo "XCFramework built successfully:"
+	@echo "  $(DESTDIR)$(prefix)/$(IOS_XCFRAMEWORK_DIR)"
 	@echo ""
 
 clean:
 	rm -rf $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)
+	rm -rf $(DESTDIR)$(prefix)/$(IOS_XCFRAMEWORK_DIR)
 
-.PHONY: default framework build-julia install-headers install-libs codesign clean
+.PHONY: default framework build-julia install-headers install-libs codesign xcframework clean

@@ -611,6 +611,11 @@ darwinframework:
 ios-framework:
 	$(MAKE) -C $(JULIAHOME)/contrib/ios IOS=1 framework
 
+ios-xcframework:
+	$(MAKE) -C $(JULIAHOME)/contrib/ios IOS=1 xcframework \
+		IOS_DEVICE_FRAMEWORK=$(IOS_DEVICE_FRAMEWORK) \
+		IOS_SIM_FRAMEWORK=$(IOS_SIM_FRAMEWORK)
+
 light-source-dist.tmp: $(BUILDROOT)/doc/_build/html/en/index.html
 ifneq ($(BUILDROOT),$(JULIAHOME))
 	$(error make light-source-dist does not work in out-of-tree builds)
