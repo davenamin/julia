@@ -77,14 +77,14 @@ $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)/Info.plist: | $(framework_destdirs)
 	/usr/libexec/PlistBuddy -x -c "Add :UIDeviceFamily:0 integer 1" $@
 	/usr/libexec/PlistBuddy -x -c "Add :UIDeviceFamily:1 integer 2" $@
 
-# Generate the module map — use an umbrella directory so that Clang picks up
-# all headers under Headers/julia/ (including the uv/ subdirectory) as part
-# of the module.
+# Generate the module map — use an umbrella header instead of an umbrella
+# directory so that the module works reliably inside XCFrameworks (umbrella
+# directories can fail to resolve after xcodebuild -create-xcframework
+# repackages the framework).
 $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_MODULES)/module.modulemap: | $(framework_destdirs)
 	@echo 'framework module $(IOS_FRAMEWORK_NAME) [extern_c] [system] {' > $@
-	@echo '  umbrella "julia"' >> $@
+	@echo '  umbrella header "$(IOS_FRAMEWORK_NAME).h"' >> $@
 	@echo '  export *' >> $@
-	@echo '  module * { export * }' >> $@
 	@echo '}' >> $@
 
 # Generate the umbrella header
