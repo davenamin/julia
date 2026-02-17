@@ -49,7 +49,7 @@ else
 IOS_PLIST_PLATFORM := iPhoneOS
 endif
 
-framework_destdirs := $(addprefix $(DESTDIR)$(prefix)/,$(IOS_FRAMEWORK_DIR) $(IOS_FRAMEWORK_HEADERS) $(IOS_FRAMEWORK_HEADERS)/julia $(IOS_FRAMEWORK_HEADERS)/julia/uv $(IOS_FRAMEWORK_HEADERS)/uv $(IOS_FRAMEWORK_MODULES))
+framework_destdirs := $(addprefix $(DESTDIR)$(prefix)/,$(IOS_FRAMEWORK_DIR) $(IOS_FRAMEWORK_HEADERS) $(IOS_FRAMEWORK_HEADERS)/julia $(IOS_FRAMEWORK_HEADERS)/julia/uv $(IOS_FRAMEWORK_MODULES))
 
 $(framework_destdirs):
 	mkdir -p $@
@@ -97,15 +97,14 @@ $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/$(IOS_FRAMEWORK_NAME).h: | $(framew
 	@echo '#include <$(IOS_FRAMEWORK_NAME)/julia/uv.h>' >> $@
 
 # Copy public headers (including uv/ subdirectory that uv.h #includes).
-# The uv headers are also installed at the Headers/ top level because
-# libuv's uv.h uses #include "uv/threadpool.h" etc., and in a framework
-# module context clang resolves those against the framework's Headers/
-# directory rather than relative to the including file.
+# Headers inside uv/ (e.g. unix.h) include siblings with a "uv/" prefix
+# (e.g. #include "uv/threadpool.h") which won't resolve when the file is
+# already inside the uv/ directory.  Strip the prefix so they find siblings
+# directly, while uv.h at the parent level keeps its "uv/" includes intact.
 install-headers: | $(framework_destdirs)
 	cp $(build_includedir)/julia/*.h $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/julia/
 	cp $(build_includedir)/julia/uv/*.h $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/julia/uv/
-	cp $(build_includedir)/julia/uv.h $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/
-	cp $(build_includedir)/julia/uv/*.h $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/uv/
+	sed -i '' 's|#include "uv/|#include "|g' $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/julia/uv/*.h
 
 # Shorthand for the framework output directory
 IOS_FWDIR = $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)
