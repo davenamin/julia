@@ -23,7 +23,14 @@ libstdcxx_path::String = ""
 libgomp_handle::Ptr{Cvoid} = C_NULL
 libgomp_path::String = ""
 
-if Sys.iswindows()
+if Base.IOS
+    # iOS uses Apple's clang runtime (compiler-rt); GCC support libraries
+    # are not available and must not be loaded.
+    const libgcc_s = ""
+    const libgfortran = ""
+    const libstdcxx = ""
+    const libgomp = ""
+elseif Sys.iswindows()
     if arch(HostPlatform()) == "x86_64"
         const libgcc_s = "libgcc_s_seh-1.dll"
     else
@@ -54,26 +61,31 @@ else
 end
 
 function __init__()
-    global libgcc_s_handle = dlopen(libgcc_s)
-    global libgcc_s_path = dlpath(libgcc_s_handle)
-    global libgfortran_handle = dlopen(libgfortran)
-    global libgfortran_path = dlpath(libgfortran_handle)
-    global libstdcxx_handle = dlopen(libstdcxx)
-    global libstdcxx_path = dlpath(libstdcxx_handle)
-    global libgomp_handle = dlopen(libgomp)
-    global libgomp_path = dlpath(libgomp_handle)
-    @static if libc(HostPlatform()) != "musl"
-        dlopen(libssp; throw_error = false)
+    @static if Base.IOS
+        # No GCC support libraries on iOS
+        global artifact_dir = dirname(Sys.BINDIR)
+    else
+        global libgcc_s_handle = dlopen(libgcc_s)
+        global libgcc_s_path = dlpath(libgcc_s_handle)
+        global libgfortran_handle = dlopen(libgfortran)
+        global libgfortran_path = dlpath(libgfortran_handle)
+        global libstdcxx_handle = dlopen(libstdcxx)
+        global libstdcxx_path = dlpath(libstdcxx_handle)
+        global libgomp_handle = dlopen(libgomp)
+        global libgomp_path = dlpath(libgomp_handle)
+        @static if libc(HostPlatform()) != "musl"
+            dlopen(libssp; throw_error = false)
+        end
+        global artifact_dir = dirname(Sys.BINDIR)
+        LIBPATH[] = dirname(libgcc_s_path)
+        push!(LIBPATH_list, LIBPATH[])
     end
-    global artifact_dir = dirname(Sys.BINDIR)
-    LIBPATH[] = dirname(libgcc_s_path)
-    push!(LIBPATH_list, LIBPATH[])
 end
 
 # JLLWrappers API compatibility shims.  Note that not all of these will really make sense.
 # For instance, `find_artifact_dir()` won't actually be the artifact directory, because
 # there isn't one.  It instead returns the overall Julia prefix.
-is_available() = true
+is_available() = !Base.IOS
 find_artifact_dir() = artifact_dir
 dev_jll() = error("stdlib JLLs cannot be dev'ed")
 best_wrapper = nothing
