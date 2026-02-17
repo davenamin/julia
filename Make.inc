@@ -1878,8 +1878,12 @@ LIBGCC_NAME := libgcc_s_seh-1.$(SHLIB_EXT)
 endif
 endif
 # On macOS, libgcc_s has soversion 1.1 always on aarch64 and only for GCC 12+
-# (-> libgfortran 5) on x86_64
+# (-> libgfortran 5) on x86_64.
+# On iOS, libgcc_s does not exist — Apple's clang runtime (compiler-rt)
+# provides the equivalent functionality.  Leave LIBGCC_NAME empty so that
+# the loader does not try to dlopen it.
 ifeq ($(OS),Darwin)
+ifneq ($(IOS),1)
 ifeq ($(ARCH),aarch64)
 LIBGCC_NAME := libgcc_s.1.1.$(SHLIB_EXT)
 else
@@ -1890,17 +1894,20 @@ LIBGCC_NAME := libgcc_s.1.$(SHLIB_EXT)
 endif
 endif
 endif
+endif
 ifneq ($(findstring $(OS),Linux FreeBSD),)
 LIBGCC_NAME := libgcc_s.$(SHLIB_EXT).1
 endif
 
 # USE_SYSTEM_CSL causes it to get symlinked into build_private_shlibdir
+ifneq ($(LIBGCC_NAME),)
 ifeq ($(USE_SYSTEM_CSL),1)
 LIBGCC_BUILD_DEPLIB := $(call dep_lib_path,$(build_shlibdir),$(build_private_shlibdir)/$(LIBGCC_NAME))
 else
 LIBGCC_BUILD_DEPLIB := $(call dep_lib_path,$(build_shlibdir),$(build_shlibdir)/$(LIBGCC_NAME))
 endif
 LIBGCC_INSTALL_DEPLIB := $(call dep_lib_path,$(shlibdir),$(private_shlibdir)/$(LIBGCC_NAME))
+endif
 
 # We only bother to define this on Linux, as that's the only platform that does libstdc++ probing
 # On all other platforms, the LIBSTDCXX_*_DEPLIB variables will be empty.
