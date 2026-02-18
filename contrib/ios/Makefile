@@ -138,6 +138,10 @@ install-libs: | $(framework_destdirs)
 		esac; \
 		cp -fL $$lib $(IOS_FWDIR)/$$name; \
 	done
+	@# --- Copy the system image (may not exist during cross-compilation) ---
+	@if [ -f $(build_private_shlibdir)/sys.$(SHLIB_EXT) ]; then \
+		cp -fL $(build_private_shlibdir)/sys.$(SHLIB_EXT) $(IOS_FWDIR)/sys.$(SHLIB_EXT); \
+	fi
 	@# --- Versioned symlinks ---
 	@# Libraries reference each other by SONAME which includes the major
 	@# version (e.g. libjulia-internal.1.12.dylib).

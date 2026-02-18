@@ -1256,7 +1256,9 @@ static void jl_resolve_sysimg_location(JL_IMAGE_SEARCH rel, const char* julia_bi
     if (julia_bindir == NULL) {
         jl_options.julia_bindir = getenv("JULIA_BINDIR");
         if (!jl_options.julia_bindir) {
-#ifdef _OS_WINDOWS_
+#if defined(_OS_WINDOWS_) || defined(JL_IOS)
+            // On Windows and iOS the "bindir" is the library directory itself
+            // (there is no separate bin/ directory).
             jl_options.julia_bindir = strdup(jl_get_libdir());
 #else
             int written = asprintf((char**)&jl_options.julia_bindir, "%s" PATHSEPSTRING ".." PATHSEPSTRING "%s", jl_get_libdir(), "bin");
