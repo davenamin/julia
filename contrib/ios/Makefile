@@ -120,6 +120,7 @@ IOS_FWDIR = $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)
 #     libjulia-codegen.dylib
 #     libLLVM.dylib
 #     libunwind.dylib
+#     libopenlibm.dylib
 #     libz.dylib
 #
 # Install-name strategy:
@@ -136,6 +137,7 @@ install-libs: | $(framework_destdirs)
 	cp -fL $(build_shlibdir)/libjulia-codegen.$(JL_MAJOR_MINOR_SHLIB_EXT) $(IOS_FWDIR)/libjulia-codegen.dylib
 	cp -fL $(build_shlibdir)/libLLVM.dylib $(IOS_FWDIR)/libLLVM.dylib
 	cp -fL $(build_shlibdir)/libunwind.dylib $(IOS_FWDIR)/libunwind.dylib
+	cp -fL $(build_shlibdir)/libopenlibm.dylib $(IOS_FWDIR)/libopenlibm.dylib
 	cp -fL $(build_shlibdir)/libz.dylib $(IOS_FWDIR)/libz.dylib
 	@# Versioned symlink: libjulia-internal and codegen reference the
 	@# versioned libjulia install name (@loader_path/libjulia.X.Y.dylib)
@@ -143,7 +145,8 @@ install-libs: | $(framework_destdirs)
 	@# --- Rewrite @rpath/ references to @loader_path/ for intra-framework resolution ---
 	@for lib in $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/libjulia-internal.dylib \
 		    $(IOS_FWDIR)/libjulia-codegen.dylib $(IOS_FWDIR)/libLLVM.dylib \
-		    $(IOS_FWDIR)/libunwind.dylib $(IOS_FWDIR)/libz.dylib; do \
+		    $(IOS_FWDIR)/libunwind.dylib $(IOS_FWDIR)/libopenlibm.dylib \
+		    $(IOS_FWDIR)/libz.dylib; do \
 		for dep in $$(otool -L $$lib 2>/dev/null | tail -n +2 | grep '@rpath/' | awk '{print $$1}'); do \
 			new=$$(echo $$dep | sed 's|@rpath/|@loader_path/|'); \
 			install_name_tool -change $$dep $$new $$lib 2>/dev/null || true; \
@@ -155,6 +158,7 @@ install-libs: | $(framework_destdirs)
 	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/libjulia-codegen.dylib $(IOS_FWDIR)/libjulia-codegen.dylib
 	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/libLLVM.dylib $(IOS_FWDIR)/libLLVM.dylib
 	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/libunwind.dylib $(IOS_FWDIR)/libunwind.dylib
+	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/libopenlibm.dylib $(IOS_FWDIR)/libopenlibm.dylib
 	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/libz.dylib $(IOS_FWDIR)/libz.dylib
 
 # Codesign the framework
