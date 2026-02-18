@@ -104,7 +104,7 @@ $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/$(IOS_FRAMEWORK_NAME).h: | $(framew
 install-headers: | $(framework_destdirs)
 	cp $(build_includedir)/julia/*.h $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/julia/
 	cp $(build_includedir)/julia/uv/*.h $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/julia/uv/
-	sed -i '' 's|#include "uv/|#include "|g' $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/julia/uv/*.h
+	sed -i '' -E 's|#[[:space:]]*include "uv/|#include "|g' $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/julia/uv/*.h
 
 # Shorthand for the framework output directory
 IOS_FWDIR = $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)
@@ -144,6 +144,7 @@ install-libs: | $(framework_destdirs)
 	ln -sf $(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/libjulia.$(JL_MAJOR_SHLIB_EXT)
 	ln -sf libjulia-internal.dylib $(IOS_FWDIR)/libjulia-internal.$(JL_MAJOR_SHLIB_EXT)
 	ln -sf libjulia-codegen.dylib $(IOS_FWDIR)/libjulia-codegen.$(JL_MAJOR_SHLIB_EXT)
+	ln -sf libunwind.dylib $(IOS_FWDIR)/libunwind.1.dylib
 	@# --- Fix up install names ---
 	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/$(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME)
 	@for lib in $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/*.$(SHLIB_EXT); do \
