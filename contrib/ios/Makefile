@@ -112,16 +112,11 @@ IOS_FWDIR = $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)
 # Copy all shared libraries into the framework and fix up install names so that
 # the framework is fully self-contained.
 #
-# Library layout inside the framework:
-#   Julia.framework/
-#     Julia                         <- main framework binary (libjulia)
-#     libjulia.$(JL_MAJOR_SHLIB_EXT) -> Julia   (versioned symlink)
-#     libjulia-internal.dylib
-#     libjulia-codegen.dylib
-#     libLLVM.dylib
-#     libunwind.dylib
-#     libopenlibm.dylib
-#     libz.dylib
+# Every .dylib in $(build_shlibdir) is bundled except for test-only libraries
+# and the libjulia loader (which is copied separately as the framework binary).
+# Versioned variants (e.g. libfoo.1.12.dylib) are skipped — only the
+# unversioned name is copied (via -fL to dereference symlinks), and explicit
+# versioned symlinks are created for the libraries that need them.
 #
 # Install-name strategy:
 #   - Each library's LC_ID_DYLIB is set to @rpath/Julia.framework/<name>
@@ -131,37 +126,37 @@ IOS_FWDIR = $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)
 #     @rpath/<name> to @loader_path/<name> so that libraries within the
 #     framework find each other regardless of the app's rpath setup.
 install-libs: | $(framework_destdirs)
-	@# --- Copy libraries (use -L to follow symlinks) ---
+	@# --- Copy the main framework binary (libjulia) ---
 	cp -fL $(build_shlibdir)/libjulia.$(JL_MAJOR_MINOR_SHLIB_EXT) $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME)
-	cp -fL $(build_shlibdir)/libjulia-internal.$(JL_MAJOR_MINOR_SHLIB_EXT) $(IOS_FWDIR)/libjulia-internal.dylib
-	cp -fL $(build_shlibdir)/libjulia-codegen.$(JL_MAJOR_MINOR_SHLIB_EXT) $(IOS_FWDIR)/libjulia-codegen.dylib
-	cp -fL $(build_shlibdir)/libLLVM.dylib $(IOS_FWDIR)/libLLVM.dylib
-	cp -fL $(build_shlibdir)/libunwind.dylib $(IOS_FWDIR)/libunwind.dylib
-	cp -fL $(build_shlibdir)/libopenlibm.dylib $(IOS_FWDIR)/libopenlibm.dylib
-	cp -fL $(build_shlibdir)/libz.dylib $(IOS_FWDIR)/libz.dylib
-	@# Versioned symlinks: libraries reference each other by the SONAME
-	@# which includes the major version (e.g. libjulia-internal.1.12.dylib).
+	@# --- Copy all other shared libraries ---
+	@for lib in $(build_shlibdir)/*.$(SHLIB_EXT); do \
+		name=$$(basename $$lib); \
+		case $$name in \
+			libjulia.$(SHLIB_EXT)) continue ;; \
+			libccalltest*|libccalllazy*|libllvmcalltest*) continue ;; \
+			*.[0-9]*.$(SHLIB_EXT)) continue ;; \
+		esac; \
+		cp -fL $$lib $(IOS_FWDIR)/$$name; \
+	done
+	@# --- Versioned symlinks ---
+	@# Libraries reference each other by SONAME which includes the major
+	@# version (e.g. libjulia-internal.1.12.dylib).
 	ln -sf $(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/libjulia.$(JL_MAJOR_SHLIB_EXT)
 	ln -sf libjulia-internal.dylib $(IOS_FWDIR)/libjulia-internal.$(JL_MAJOR_SHLIB_EXT)
 	ln -sf libjulia-codegen.dylib $(IOS_FWDIR)/libjulia-codegen.$(JL_MAJOR_SHLIB_EXT)
-	@# --- Rewrite @rpath/ references to @loader_path/ for intra-framework resolution ---
-	@for lib in $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/libjulia-internal.dylib \
-		    $(IOS_FWDIR)/libjulia-codegen.dylib $(IOS_FWDIR)/libLLVM.dylib \
-		    $(IOS_FWDIR)/libunwind.dylib $(IOS_FWDIR)/libopenlibm.dylib \
-		    $(IOS_FWDIR)/libz.dylib; do \
+	@# --- Fix up install names ---
+	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/$(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME)
+	@for lib in $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/*.$(SHLIB_EXT); do \
+		[ -f $$lib ] || continue; \
+		name=$$(basename $$lib); \
+		if [ "$$name" != "$(IOS_FRAMEWORK_NAME)" ]; then \
+			install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/$$name $$lib 2>/dev/null || true; \
+		fi; \
 		for dep in $$(otool -L $$lib 2>/dev/null | tail -n +2 | grep '@rpath/' | awk '{print $$1}'); do \
 			new=$$(echo $$dep | sed 's|@rpath/|@loader_path/|'); \
 			install_name_tool -change $$dep $$new $$lib 2>/dev/null || true; \
 		done; \
 	done
-	@# --- Set install name IDs (for linking from the app) ---
-	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/$(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME)
-	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/libjulia-internal.dylib $(IOS_FWDIR)/libjulia-internal.dylib
-	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/libjulia-codegen.dylib $(IOS_FWDIR)/libjulia-codegen.dylib
-	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/libLLVM.dylib $(IOS_FWDIR)/libLLVM.dylib
-	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/libunwind.dylib $(IOS_FWDIR)/libunwind.dylib
-	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/libopenlibm.dylib $(IOS_FWDIR)/libopenlibm.dylib
-	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/libz.dylib $(IOS_FWDIR)/libz.dylib
 
 # Codesign the framework
 codesign:
