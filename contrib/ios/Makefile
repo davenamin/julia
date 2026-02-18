@@ -139,9 +139,11 @@ install-libs: | $(framework_destdirs)
 	cp -fL $(build_shlibdir)/libunwind.dylib $(IOS_FWDIR)/libunwind.dylib
 	cp -fL $(build_shlibdir)/libopenlibm.dylib $(IOS_FWDIR)/libopenlibm.dylib
 	cp -fL $(build_shlibdir)/libz.dylib $(IOS_FWDIR)/libz.dylib
-	@# Versioned symlink: libjulia-internal and codegen reference the
-	@# versioned libjulia install name (@loader_path/libjulia.X.Y.dylib)
+	@# Versioned symlinks: libraries reference each other by the SONAME
+	@# which includes the major version (e.g. libjulia-internal.1.12.dylib).
 	ln -sf $(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/libjulia.$(JL_MAJOR_SHLIB_EXT)
+	ln -sf libjulia-internal.dylib $(IOS_FWDIR)/libjulia-internal.$(JL_MAJOR_SHLIB_EXT)
+	ln -sf libjulia-codegen.dylib $(IOS_FWDIR)/libjulia-codegen.$(JL_MAJOR_SHLIB_EXT)
 	@# --- Rewrite @rpath/ references to @loader_path/ for intra-framework resolution ---
 	@for lib in $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/libjulia-internal.dylib \
 		    $(IOS_FWDIR)/libjulia-codegen.dylib $(IOS_FWDIR)/libLLVM.dylib \
