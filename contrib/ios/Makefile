@@ -143,12 +143,27 @@ install-libs: | $(framework_destdirs)
 		cp -fL $(build_private_shlibdir)/sys.$(SHLIB_EXT) $(IOS_FWDIR)/sys.$(SHLIB_EXT); \
 	fi
 	@# --- Versioned symlinks ---
-	@# Libraries reference each other by SONAME which includes the major
-	@# version (e.g. libjulia-internal.1.12.dylib).
+	@# The framework contains only unversioned dylibs (e.g. libgmp.dylib).
+	@# Julia ccall constants and inter-library SONAMEs reference versioned
+	@# names (e.g. @rpath/libgmp.10.dylib, @rpath/libpcre2-8.0.dylib).
+	@# Create symlinks so that versioned lookups resolve to the unversioned
+	@# copies.
+	@#
+	@# libjulia is special — the framework binary is named "Julia", not
+	@# "libjulia.dylib", so handle it manually.
 	ln -sf $(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/libjulia.$(JL_MAJOR_SHLIB_EXT)
-	ln -sf libjulia-internal.dylib $(IOS_FWDIR)/libjulia-internal.$(JL_MAJOR_SHLIB_EXT)
-	ln -sf libjulia-codegen.dylib $(IOS_FWDIR)/libjulia-codegen.$(JL_MAJOR_SHLIB_EXT)
-	ln -sf libunwind.dylib $(IOS_FWDIR)/libunwind.1.dylib
+	ln -sf $(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/libjulia.$(JL_MAJOR_MINOR_SHLIB_EXT)
+	@# Scan the build directory for all versioned dylib names and create
+	@# symlinks pointing to the corresponding unversioned file in the
+	@# framework (e.g. libgmp.10.dylib → libgmp.dylib).
+	@for lib in $(build_shlibdir)/*.[0-9]*.$(SHLIB_EXT); do \
+		[ -e "$$lib" ] || continue; \
+		name=$$(basename "$$lib"); \
+		unversioned=$$(echo "$$name" | sed -E 's/\.[0-9]+(\.[0-9]+)*\.dylib$$/.dylib/'); \
+		if [ -f "$(IOS_FWDIR)/$$unversioned" ] && [ ! -e "$(IOS_FWDIR)/$$name" ]; then \
+			ln -sf "$$unversioned" "$(IOS_FWDIR)/$$name"; \
+		fi; \
+	done
 	@# --- Fix up install names ---
 	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/$(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME)
 	@for lib in $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/*.$(SHLIB_EXT); do \
