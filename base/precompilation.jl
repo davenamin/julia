@@ -2,18 +2,19 @@ module Precompilation
 
 using Base: PkgId, UUID, SHA1, parsed_toml, project_file_name_uuid, project_names,
             project_file_manifest_path, get_deps, preferences_names, isaccessibledir, isfile_casesensitive,
-            base_project, isdefined
+            base_project, env_project_file, isdefined
 
 # This is currently only used for pkgprecompile but the plan is to use this in code loading in the future
 # see the `kc/codeloading2.0` branch
 struct ExplicitEnv
     path::String
-    project_deps::Dict{String, UUID} # [deps] in Project.toml
-    project_weakdeps::Dict{String, UUID} # [weakdeps] in Project.toml
-    project_extras::Dict{String, UUID} # [extras] in Project.toml
-    project_extensions::Dict{String, Vector{UUID}} # [exts] in Project.toml
-    deps::Dict{UUID, Vector{UUID}} # all dependencies in Manifest.toml
-    weakdeps::Dict{UUID, Vector{UUID}} # all weak dependencies in Manifest.toml
+    project_deps::Dict{String, UUID}     # [deps] in the active project's Project.toml
+    project_weakdeps::Dict{String, UUID} # [weakdeps] in the active project's Project.toml
+    project_extras::Dict{String, UUID}   # [extras] in the active project's Project.toml
+    project_extensions::Dict{String, Vector{UUID}} # [extensions] in the active project's Project.toml
+    workspace_deps::Dict{String, UUID}   # union of [deps] from all workspace member Project.tomls
+    deps::Dict{UUID, Vector{UUID}}       # full dependency graph from Manifest.toml
+    weakdeps::Dict{UUID, Vector{UUID}}   # full weak dependency graph from Manifest.toml
     extensions::Dict{UUID, Dict{String, Vector{UUID}}}
     # Lookup name for a UUID
     names::Dict{UUID, String}
@@ -33,6 +34,7 @@ function ExplicitEnv(::Nothing, envpath::String="")
         Dict{String, UUID}(),     # project_weakdeps
         Dict{String, UUID}(),     # project_extras
         Dict{String, Vector{UUID}}(), # project_extensions
+        Dict{String, UUID}(),     # workspace_deps
         Dict{UUID, Vector{UUID}}(),   # deps
         Dict{UUID, Vector{UUID}}(),   # weakdeps
         Dict{UUID, Dict{String, Vector{UUID}}}(), # extensions
@@ -260,8 +262,38 @@ function ExplicitEnv(envpath::String)
     end
     =#
 
+    # Collect the union of [deps] from all workspace member projects.
+    # For non-workspace projects, this is the same as project_deps.
+    workspace_deps = copy(project_deps)
+    base = base_project(envpath)
+    if base !== nothing
+        base_d = parsed_toml(base)
+        # Add deps from the workspace root project
+        for (name, _uuid) in get(Dict{String, Any}, base_d, "deps")::Dict{String, Any}
+            workspace_deps[name] = UUID(_uuid::String)
+        end
+        # Add deps from each workspace member project
+        ws = get(base_d, "workspace", nothing)::Union{Dict{String, Any}, Nothing}
+        if ws !== nothing
+            ws_projects = get(ws, "projects", nothing)::Union{Vector{String}, Nothing, String}
+            if ws_projects isa Vector
+                ws_root = dirname(base)
+                for ws_proj in ws_projects
+                    ws_proj_dir = joinpath(ws_root, ws_proj)
+                    ws_proj_file = Base.env_project_file(ws_proj_dir)
+                    ws_proj_file isa String || continue
+                    ws_d = parsed_toml(ws_proj_file)
+                    for (name, _uuid) in get(Dict{String, Any}, ws_d, "deps")::Dict{String, Any}
+                        workspace_deps[name] = UUID(_uuid::String)
+                    end
+                end
+            end
+        end
+    end
+
     return ExplicitEnv(envpath, project_deps, project_weakdeps, project_extras,
-                       project_extensions, deps_expanded, weakdeps_expanded, extensions_expanded,
+                       project_extensions, workspace_deps,
+                       deps_expanded, weakdeps_expanded, extensions_expanded,
                        names, lookup_strategy, #=prefs, local_prefs=#)
 end
 
@@ -490,6 +522,14 @@ function precompilepkgs(pkgs::Union{Vector{String}, Vector{PkgId}}=String[];
                    IOContext{IO}(io), fancyprint, manifest, ignore_loaded)
 end
 
+function _collect_reachable!(pkg_uuids::Set{UUID}, deps::Dict{UUID, Vector{UUID}}, uuid::UUID)
+    uuid in pkg_uuids && return
+    push!(pkg_uuids, uuid)
+    for dep_uuid in get(Vector{UUID}, deps, uuid)
+        _collect_reachable!(pkg_uuids, deps, dep_uuid)
+    end
+end
+
 function _precompilepkgs(pkgs::Union{Vector{String}, Vector{PkgId}},
                          internal_call::Bool,
                          strict::Bool,
@@ -568,20 +608,30 @@ function _precompilepkgs(pkgs::Union{Vector{String}, Vector{PkgId}},
         return name
     end
 
+    # Determine which packages to consider for precompilation by walking
+    # transitive dependencies from the appropriate roots.
+    # `manifest` controls the scope: workspace_deps (all members) vs project_deps (current project).
+    roots = manifest ? env.workspace_deps : env.project_deps
+    pkg_uuids = Set{UUID}()
+    for (_, uuid) in roots
+        _collect_reachable!(pkg_uuids, env.deps, uuid)
+    end
+
     triggers = Dict{Base.PkgId,Vector{Base.PkgId}}()
-    for (dep, deps) in env.deps
+    for dep in pkg_uuids
+        haskey(env.deps, dep) || continue
         pkg = Base.PkgId(dep, env.names[dep])
         Base.in_sysimage(pkg) && continue
-        deps = [Base.PkgId(x, env.names[x]) for x in deps]
+        deps = [Base.PkgId(x, env.names[x]) for x in env.deps[dep]]
         direct_deps[pkg] = filter!(!Base.in_sysimage, deps)
-        for (ext_name, trigger_uuids) in env.extensions[dep]
+        for (ext_name, trigger_uuids) in get(Dict{String, Vector{UUID}}, env.extensions, dep)
             ext_uuid = Base.uuid5(pkg.uuid, ext_name)
             ext = Base.PkgId(ext_uuid, ext_name)
             triggers[ext] = Base.PkgId[pkg] # depends on parent package
             all_triggers_available = true
             for trigger_uuid in trigger_uuids
                 trigger_name = env.names[trigger_uuid]
-                if trigger_uuid in keys(env.deps)
+                if trigger_uuid in pkg_uuids
                     push!(triggers[ext], Base.PkgId(trigger_uuid, trigger_name))
                 else
                     all_triggers_available = false
@@ -734,14 +784,8 @@ function _precompilepkgs(pkgs::Union{Vector{String}, Vector{PkgId}},
     end
     @debug "precompile: circular dep check done"
 
-    # If you have a workspace and want to precompile all projects in it, look through all packages in the manifest
-    # instead of collecting from a project i.e. not filter out packages that are in the current project.
-    # i.e. Pkg sets manifest to true for workspace precompile requests
-    # TODO: rename `manifest`?
-    if !manifest
-        if isempty(pkg_names)
-            pkg_names = [pkg.name for pkg in project_deps]
-        end
+    # Filter to specific requested packages if the caller asked for a subset
+    if !isempty(pkg_names)
         keep = Set{Base.PkgId}()
         for dep in direct_deps
             dep_pkgid = first(dep)
@@ -765,15 +809,16 @@ function _precompilepkgs(pkgs::Union{Vector{String}, Vector{PkgId}},
             end
         end
         filter!(d->in(first(d), keep), direct_deps)
-        if isempty(direct_deps)
-            if _from_loading
-                # if called from loading precompilation it may be a package from another environment stack so
-                # don't error and allow serial precompilation to try
-                # TODO: actually handle packages from other envs in the stack
-                return
-            else
-                return
-            end
+    end
+
+    if isempty(direct_deps)
+        if _from_loading
+            # if called from loading precompilation it may be a package from another environment stack so
+            # don't error and allow serial precompilation to try
+            # TODO: actually handle packages from other envs in the stack
+            return
+        else
+            return
         end
     end
 

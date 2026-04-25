@@ -610,13 +610,15 @@ the form `pkgversion(@__MODULE__)` can be used.
     This function was introduced in Julia 1.9.
 """
 function pkgversion(m::Module)
-    path = pkgdir(m)
-    path === nothing && return nothing
     @lock require_lock begin
-        v = get_pkgversion_from_path(path)
         pkgorigin = get(pkgorigins, PkgId(moduleroot(m)), nothing)
-        # Cache the version
-        if pkgorigin !== nothing && pkgorigin.version === nothing
+        if pkgorigin !== nothing && pkgorigin.version !== nothing
+            return pkgorigin.version
+        end
+        path = pkgdir(m)
+        path === nothing && return nothing
+        v = get_pkgversion_from_path(path)
+        if pkgorigin !== nothing
             pkgorigin.version = v
         end
         return v
@@ -2652,6 +2654,8 @@ function __require_prelocked(pkg::PkgId, env)
             project = active_project()
             if !generating_output() && !parallel_precompile_attempted && !disable_parallel_precompile && @isdefined(Precompilation)
                 parallel_precompile_attempted = true
+                local verbosity = isinteractive() ? CoreLogging.Info : CoreLogging.Debug
+                @logmsg verbosity "Precompiling $(repr("text/plain", pkg))$(list_reasons(reasons))"
                 unlock(require_lock)
                 try
                     Precompilation.precompilepkgs([pkg]; _from_loading=true, ignore_loaded=false)

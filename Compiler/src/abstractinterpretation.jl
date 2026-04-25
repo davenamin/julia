@@ -1307,7 +1307,6 @@ end
 function const_prop_call(interp::AbstractInterpreter,
     mi::MethodInstance, result::MethodCallResult, arginfo::ArgInfo, sv::AbsIntState,
     concrete_eval_result::Union{Nothing,ConstCallResult}=nothing)
-    inf_cache = get_inference_cache(interp)
     𝕃ᵢ = typeinf_lattice(interp)
     forwarded_argtypes = compute_forwarded_argtypes(interp, arginfo, sv)
     # use `cache_argtypes` that has been constructed for fresh regular inference if available
@@ -1318,8 +1317,13 @@ function const_prop_call(interp::AbstractInterpreter,
         cache_argtypes = matching_cache_argtypes(𝕃ᵢ, mi)
     end
     argtypes = matching_cache_argtypes(𝕃ᵢ, mi, forwarded_argtypes, cache_argtypes)
-    inf_result = cache_lookup(𝕃ᵢ, mi, argtypes, inf_cache)
-    if inf_result !== nothing
+    inf_result = cache_lookup(𝕃ᵢ, mi, argtypes, get_inference_cache(interp))
+    if inf_result === missing
+        # a previous const-prop attempt hit a cycle and produced a limited result;
+        # don't re-attempt the same work that would lead to the same limited outcome
+        add_remark!(interp, sv, "[constprop] Found cached but limited constant inference result")
+        return nothing
+    elseif inf_result isa InferenceResult
         # found the cache for this constant prop'
         if inf_result.result === nothing
             add_remark!(interp, sv, "[constprop] Found cached constant inference in a cycle")
@@ -1354,6 +1358,13 @@ function const_prop_call(interp::AbstractInterpreter,
         callstack = frame.callstack::Vector{AbsIntState}
         @assert callstack[end] === frame && length(callstack) == frame.frameid
         pop!(callstack)
+        return nothing
+    end
+    if inf_result.tombstone
+        # This const-prop attempt resolved but hit a cycle and produced a limited result.
+        # The tombstoned entry is already cached by `promotecache!` via the normal local
+        # cache mechanism, so `constprop_cache_lookup` will find it on subsequent lookups.
+        add_remark!(interp, sv, "[constprop] Constant inference produced a limited result")
         return nothing
     end
     existing_edge = result.edge
@@ -2642,6 +2653,8 @@ function abstract_call_known(interp::AbstractInterpreter, @nospecialize(f),
         arginfo::ArgInfo, si::StmtInfo, sv::AbsIntState,
         max_methods::Int = get_max_methods(interp, f, sv))
     (; fargs, argtypes) = arginfo
+    argtypes::Vector{Any} = arginfo.argtypes  # declare type because the closure below captures `argtypes`
+    fargs = arginfo.fargs
     la = length(argtypes)
     𝕃ᵢ = typeinf_lattice(interp)
     if isa(f, Builtin)
