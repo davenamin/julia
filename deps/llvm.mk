@@ -108,11 +108,20 @@ ifeq ($(OS), WINNT)
 LLVM_CPPFLAGS += -D__USING_SJLJ_EXCEPTIONS__ -D__CRT__NO_INLINE
 endif # OS == WINNT
 ifneq ($(HOSTCC),$(CC))
-LLVM_CMAKE += -DCROSS_TOOLCHAIN_FLAGS_NATIVE="-DCMAKE_C_COMPILER=$$(which $(HOSTCC));-DCMAKE_CXX_COMPILER=$$(which $(HOSTCXX))"
+LLVM_CMAKE += -DCROSS_TOOLCHAIN_FLAGS_NATIVE="-DCMAKE_C_COMPILER=$$(which $(HOSTCC));-DCMAKE_CXX_COMPILER=$$(which $(HOSTCXX));-DCMAKE_C_FLAGS=$(HOST_CFLAGS);-DCMAKE_CXX_FLAGS=$(HOST_CXXFLAGS)"
 endif
 ifeq ($(OS), emscripten)
 LLVM_CMAKE += -DCMAKE_TOOLCHAIN_FILE=$(EMSCRIPTEN)/cmake/Modules/Platform/Emscripten.cmake -DLLVM_INCLUDE_TOOLS=OFF -DLLVM_BUILD_TOOLS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_ENABLE_THREADS=OFF -DLLVM_BUILD_UTILS=OFF
 endif # OS == emscripten
+ifeq ($(IOS), 1)
+# Use LLVM's own iOS CMake toolchain file; it sets up the correct SDK,
+# deployment target, and platform flags so that CMake does not inject
+# -mmacosx-version-min (which conflicts with -mios-version-min).
+LLVM_CMAKE += -DCMAKE_TOOLCHAIN_FILE=$(SRCCACHE)/$(LLVM_SRC_DIR)/llvm/cmake/platforms/iOS.cmake
+LLVM_CMAKE += -DCMAKE_OSX_SYSROOT=$(IOS_SDK)
+LLVM_CMAKE += -DCMAKE_OSX_ARCHITECTURES=arm64
+LLVM_CMAKE += -DCMAKE_OSX_DEPLOYMENT_TARGET=$(IOS_VERSION_MIN)
+endif # IOS
 ifeq ($(USE_LLVM_SHLIB),1)
 # NOTE: we could also --disable-static here (on the condition we link tools
 #       against libLLVM) but there doesn't seem to be a CMake counterpart option
@@ -230,6 +239,9 @@ LLVM_PATCH_PREV := $$(SRCCACHE)/$$(LLVM_SRC_DIR)/$1.patch-applied
 endef
 
 $(eval $(call LLVM_PATCH,llvm-ittapi-cmake))
+# Exclude iOS (and other Apple embedded platforms) from -Wl,-z,defs in
+# HandleLLVMOptions.cmake; Apple's ld64 does not support the -z flag.
+$(eval $(call LLVM_PROJ_PATCH,llvm-ios-no-z-defs))
 
 ifeq ($(USE_SYSTEM_ZLIB), 0)
 $(LLVM_BUILDDIR_withtype)/build-configured: | $(build_prefix)/manifest/zlib

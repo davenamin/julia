@@ -20,7 +20,8 @@
 
 #include "julia_assert.h"
 
-// private keymgr stuff
+// private keymgr stuff (not available on iOS)
+#if !TARGET_OS_IPHONE
 #define KEYMGR_GCC3_DW2_OBJ_LIST 302
 enum {
   NM_ALLOW_RECURSION = 1,
@@ -31,6 +32,7 @@ extern int _keymgr_unlock_processwide_ptr(unsigned int key);
 extern void *_keymgr_get_and_lock_processwide_ptr(unsigned int key);
 extern int _keymgr_get_and_lock_processwide_ptr_2(unsigned int key, void **result);
 extern int _keymgr_set_lockmode_processwide_ptr(unsigned int key, unsigned int mode);
+#endif
 
 // private dyld3/dyld4 stuff
 extern void _dyld_atfork_prepare(void) __attribute__((weak_import));
@@ -109,6 +111,7 @@ void *mach_segv_listener(void *arg)
 
 static void allocate_mach_handler(void)
 {
+#if !TARGET_OS_IPHONE
     // ensure KEYMGR_GCC3_DW2_OBJ_LIST is initialized, as this requires malloc
     // and thus can deadlock when used without first initializing it.
     // Apple caused this problem in their libunwind in 10.9 (circa keymgr-28)
@@ -119,6 +122,7 @@ static void allocate_mach_handler(void)
     // (this is quite thread-unsafe)
     if (_keymgr_set_lockmode_processwide_ptr(KEYMGR_GCC3_DW2_OBJ_LIST, NM_ALLOW_RECURSION))
         jl_error("_keymgr_set_lockmode_processwide_ptr failed");
+#endif
 
     int16_t nthreads = jl_atomic_load_acquire(&jl_n_threads);
     arraylist_new(&suspended_threads, nthreads); // we will resize later (inside safepoint_lock), if needed
@@ -568,9 +572,13 @@ static kern_return_t profiler_segv_handler(
 static int jl_lock_profile_mach(int dlsymlock)
 {
     jl_lock_profile();
-    // workaround for old keymgr bugs
+    // workaround for old keymgr bugs (keymgr is not available on iOS)
     void *unused = NULL;
+#if !TARGET_OS_IPHONE
     int keymgr_locked = _keymgr_get_and_lock_processwide_ptr_2(KEYMGR_GCC3_DW2_OBJ_LIST, &unused) == 0;
+#else
+    int keymgr_locked = 0;
+#endif
     // workaround for new dlsym4 bugs in the workaround for dlsym bugs: _dyld_atfork_prepare
     // acquires its locks in the wrong order, but fortunately we happen to able to guard it
     // with this call to force it to prevent that TSAN violation from causing a deadlock
@@ -588,8 +596,10 @@ static void jl_unlock_profile_mach(int dlsymlock, int keymgr_locked)
         _dyld_atfork_parent();
     if (dlsymlock && _dyld_dlopen_atfork_prepare != NULL && _dyld_dlopen_atfork_parent != NULL)
         _dyld_dlopen_atfork_parent();
+#if !TARGET_OS_IPHONE
     if (keymgr_locked)
         _keymgr_unlock_processwide_ptr(KEYMGR_GCC3_DW2_OBJ_LIST);
+#endif
     jl_unlock_profile();
 }
 

@@ -43,7 +43,12 @@ DEP_LIBS += blastrampoline
 endif
 
 ifeq ($(USE_SYSTEM_CSL), 0)
+# No GCC support libraries on iOS (see CompilerSupportLibraries_jll) — and
+# csl.mk copies *host* macOS dylibs from $(FC)'s search path, which must
+# never end up bundled into the iOS framework.
+ifneq ($(IOS), 1)
 DEP_LIBS += csl
+endif
 endif
 
 ifeq ($(SANITIZE), 1)
