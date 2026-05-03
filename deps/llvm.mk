@@ -121,6 +121,15 @@ LLVM_CMAKE += -DCMAKE_TOOLCHAIN_FILE=$(SRCCACHE)/$(LLVM_SRC_DIR)/llvm/cmake/plat
 LLVM_CMAKE += -DCMAKE_OSX_SYSROOT=$(IOS_SDK)
 LLVM_CMAKE += -DCMAKE_OSX_ARCHITECTURES=arm64
 LLVM_CMAKE += -DCMAKE_OSX_DEPLOYMENT_TARGET=$(IOS_VERSION_MIN)
+# iOS only needs libLLVM (the shared library); the various host-side
+# tools under llvm/tools/ are not used at runtime.  Mark all tools as
+# optional and disable sancov in particular, which fails to compile
+# against newer iPhoneOS SDK libc++ in LLVM 15 (sancov.cpp's
+# `{{ClBlacklist}}` initializer rejected as explicit-constructor
+# copy-init by libc++ in iPhoneOS 26+ SDKs).
+# (LLVM_INCLUDE_UTILS is left ON so llvm-tblgen still builds.)
+LLVM_CMAKE += -DLLVM_BUILD_TOOLS=OFF
+LLVM_CMAKE += -DLLVM_TOOL_SANCOV_BUILD=OFF
 endif # IOS
 ifeq ($(USE_LLVM_SHLIB),1)
 # NOTE: we could also --disable-static here (on the condition we link tools
