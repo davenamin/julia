@@ -44,6 +44,15 @@ CMAKE_CXX := "$$(which $(CXX_BASE))"
 CMAKE_CC_ARG := $(CC_ARG)
 CMAKE_CXX_ARG := $(CXX_ARG)
 endif
+# For iOS, cmake's native cross-compilation support (CMAKE_SYSTEM_NAME=iOS,
+# CMAKE_OSX_SYSROOT, CMAKE_OSX_ARCHITECTURES, CMAKE_OSX_DEPLOYMENT_TARGET)
+# handles -isysroot, -arch, and deployment-target flags.  Strip those from
+# CMAKE_C_COMPILER_ARG1 to avoid duplicating / conflicting with cmake's own
+# flags.  Keep only -D defines (e.g. -DJL_IOS, -DTARGET_OS_IPHONE=1).
+ifeq ($(IOS),1)
+CMAKE_CC_ARG := $(filter -D%,$(CMAKE_CC_ARG))
+CMAKE_CXX_ARG := $(filter -D%,$(CMAKE_CXX_ARG))
+endif
 CMAKE_COMMON += -DCMAKE_C_COMPILER=$(CMAKE_CC)
 ifneq ($(strip $(CMAKE_CC_ARG)),)
 CMAKE_COMMON += -DCMAKE_C_COMPILER_ARG1="$(CMAKE_CC_ARG) $(SANITIZE_OPTS)"
@@ -57,6 +66,18 @@ CMAKE_COMMON += -DCMAKE_LINKER="$$(which $(LD))" -DCMAKE_AR="$$(which $(AR))" -D
 ifeq ($(OS),WINNT)
 CMAKE_COMMON += -DCMAKE_SYSTEM_NAME=Windows
 CMAKE_COMMON += -DCMAKE_RC_COMPILER="$$(which $(CROSS_COMPILE)windres)"
+endif
+
+ifeq ($(IOS),1)
+CMAKE_COMMON += -DCMAKE_SYSTEM_NAME=iOS
+CMAKE_COMMON += -DCMAKE_OSX_SYSROOT=$(IOS_SDK)
+CMAKE_COMMON += -DCMAKE_OSX_ARCHITECTURES=arm64
+CMAKE_COMMON += -DCMAKE_OSX_DEPLOYMENT_TARGET=$(IOS_VERSION_MIN)
+# In cross-compilation mode CMake restricts find_*() calls to paths
+# under CMAKE_FIND_ROOT_PATH.  Add the Julia build prefix so that
+# deps installed earlier (e.g. OpenSSL) are visible to later deps
+# (e.g. libssh2, libgit2).
+CMAKE_COMMON += -DCMAKE_FIND_ROOT_PATH=$(build_prefix)
 endif
 
 # For now this is LLVM specific, but I expect it won't be in the future

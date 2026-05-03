@@ -13,7 +13,7 @@
 #include "support/strtod.h"
 #include "gc-alloc-profiler.h"
 #include "support/rle.h"
-#include <uv.h>
+#include "uv.h"
 #include <llvm-c/Types.h>
 #include <llvm-c/Orc.h>
 #if !defined(_WIN32)

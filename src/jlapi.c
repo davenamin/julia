@@ -74,7 +74,9 @@ JL_DLLEXPORT void jl_init_with_image(const char *julia_bindir,
 JL_DLLEXPORT void jl_init(void)
 {
     char *libbindir = NULL;
-#ifdef _OS_WINDOWS_
+#if defined(_OS_WINDOWS_) || defined(JL_IOS)
+    // On Windows and iOS the "bindir" is the library directory itself
+    // (there is no separate bin/ directory).
     libbindir = strdup(jl_get_libdir());
 #else
     (void)asprintf(&libbindir, "%s" PATHSEPSTRING ".." PATHSEPSTRING "%s", jl_get_libdir(), "bin");

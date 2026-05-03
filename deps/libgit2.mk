@@ -14,6 +14,10 @@ $(BUILDDIR)/$(LIBGIT2_SRC_DIR)/build-configured: | $(build_prefix)/manifest/mbed
 endif
 
 LIBGIT2_OPTS := $(CMAKE_COMMON) -DCMAKE_BUILD_TYPE=Release -DUSE_THREADS=ON -DUSE_BUNDLED_ZLIB=ON -DUSE_SSH=ON -DBUILD_CLI=OFF
+ifeq ($(IOS),1)
+# system() is unavailable on iOS; skip building the test suite.
+LIBGIT2_OPTS += -DBUILD_TESTS=OFF
+endif
 ifeq ($(OS),WINNT)
 LIBGIT2_OPTS += -DWIN32=ON -DMINGW=ON
 ifeq ($(USE_SYSTEM_LIBSSH2), 0)
