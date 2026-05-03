@@ -218,6 +218,11 @@ USE_GPL_LIBS ?= 1
 # Whether to install Julia as a framework on Darwin (Apple) platforms.
 DARWIN_FRAMEWORK ?= 0
 
+# Whether to build Julia as a shared library for iOS.
+# Set IOS=1 to cross-compile for iOS (arm64).
+# Requires Xcode and the iOS SDK to be installed.
+IOS ?= 0
+
 # Override in Make.user to customize the framework:
 FRAMEWORK_NAME ?= Julia
 FRAMEWORK_VERSION ?= $(JULIA_MAJOR_VERSION).$(JULIA_MINOR_VERSION)
@@ -441,6 +446,52 @@ fPIC := -fPIC
 EXE :=
 endif
 
+# iOS cross-compilation configuration
+ifeq ($(IOS), 1)
+override OS := Darwin
+override ARCH := aarch64
+APPLE_ARCH := arm64
+IOS_VERSION_MIN ?= 14.0
+# IOS_PLATFORM selects the target: iphoneos (device) or iphonesimulator
+IOS_PLATFORM ?= iphoneos
+IOS_SDK := $(shell xcrun --sdk $(IOS_PLATFORM) --show-sdk-path 2>/dev/null)
+ifeq ($(IOS_SDK),)
+$(error iOS SDK not found for platform '$(IOS_PLATFORM)'. Ensure Xcode and iOS SDK are installed.)
+endif
+# Use clang from Xcode for the selected platform
+CC := $(shell xcrun --sdk $(IOS_PLATFORM) -f clang)
+CXX := $(shell xcrun --sdk $(IOS_PLATFORM) -f clang++)
+# iOS target flags — use the correct version-min flag for device vs simulator
+ifeq ($(IOS_PLATFORM),iphonesimulator)
+IOS_VERSION_MIN_FLAG := -mios-simulator-version-min=$(IOS_VERSION_MIN)
+else
+IOS_VERSION_MIN_FLAG := -mios-version-min=$(IOS_VERSION_MIN)
+endif
+IOS_TARGET_FLAGS := -arch arm64 -isysroot $(IOS_SDK) $(IOS_VERSION_MIN_FLAG) -DJL_IOS -DTARGET_OS_IPHONE=1
+CC += $(IOS_TARGET_FLAGS)
+CXX += $(IOS_TARGET_FLAGS)
+FC := false
+# iOS doesn't support executables from user builds
+EXE :=
+# Do NOT export IPHONEOS_DEPLOYMENT_TARGET globally — it leaks into native
+# host-tool builds (e.g. LLVM tblgen) and causes clang to target iPhone even
+# when using the macOS sysroot.  CMake already receives the deployment target
+# via -DCMAKE_OSX_DEPLOYMENT_TARGET; individual dep recipes that need the
+# environment variable can set it locally.
+IPHONEOS_DEPLOYMENT_TARGET := $(IOS_VERSION_MIN)
+# Force these settings for iOS
+USECLANG := 1
+USEGCC := 0
+# Host tools (like LLVM tblgen) must be built with the macOS SDK, not the iOS
+# SDK.  Use := (immediate) to override the delayed-expansion HOSTCC set earlier.
+MACOS_SDK := $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)
+HOSTCC := $(shell xcrun --sdk macosx -f clang)
+HOSTCXX := $(shell xcrun --sdk macosx -f clang++)
+HOST_CFLAGS := -isysroot $(MACOS_SDK)
+HOST_CXXFLAGS := -isysroot $(MACOS_SDK)
+USE_CROSS_FLISP := 1
+endif
+
 # Set to 1 to enable profiling with perf
 ifeq ("$(OS)", "Linux")
 USE_PERF_JITEVENTS ?= 1
@@ -480,15 +531,19 @@ USECLANG := 0
 USEGCC := 1
 endif
 
+ifneq ($(IOS), 1)
 FC := $(CROSS_COMPILE)gfortran
+endif
 
 # Note: Supporting only macOS Yosemite and above
 ifeq ($(OS), Darwin)
+ifneq ($(IOS), 1)
 APPLE_ARCH := $(shell uname -m)
 ifneq ($(APPLE_ARCH),arm64)
 MACOSX_VERSION_MIN := 10.14
 else
 MACOSX_VERSION_MIN := 11.0
+endif
 endif
 endif
 
@@ -542,12 +597,27 @@ DEBUGFLAGS := $(DEBUGFLAGS_CLANG)
 SHIPFLAGS  := $(SHIPFLAGS_CLANG)
 
 ifeq ($(OS), Darwin)
+ifneq ($(IOS), 1)
 CC += -mmacosx-version-min=$(MACOSX_VERSION_MIN)
 CXX += -mmacosx-version-min=$(MACOSX_VERSION_MIN)
 FC += -mmacosx-version-min=$(MACOSX_VERSION_MIN)
 # export MACOSX_DEPLOYMENT_TARGET so that ld picks it up, especially for deps
 export MACOSX_DEPLOYMENT_TARGET=$(MACOSX_VERSION_MIN)
+else
+# Ensure MACOSX_DEPLOYMENT_TARGET does not leak from the user's environment
+# into dependency builds (e.g. CMake), which would cause conflicting
+# -mmacosx-version-min and -mios-version-min flags.
+unexport MACOSX_DEPLOYMENT_TARGET
+override MACOSX_DEPLOYMENT_TARGET=
 endif
+endif
+endif
+
+# Re-apply iOS compiler and target flags after compiler detection,
+# since the USECLANG/USEGCC blocks above override CC/CXX.
+ifeq ($(IOS), 1)
+CC := $(shell xcrun --sdk $(IOS_PLATFORM) -f clang) $(IOS_TARGET_FLAGS)
+CXX := $(shell xcrun --sdk $(IOS_PLATFORM) -f clang++) $(IOS_TARGET_FLAGS)
 endif
 
 JLDFLAGS :=
@@ -901,6 +971,14 @@ else
 ISX86:=0
 endif
 
+# iOS is always cross-compiled, default to apple-m1 if nothing was set
+ifeq ($(IOS), 1)
+ifeq ($(MARCH)$(MCPU)$(MTUNE)$(JULIA_CPU_TARGET),)
+MCPU = apple-m1
+JULIA_CPU_TARGET ?= apple-m1
+endif
+endif
+
 # If we are running on powerpc64le or ppc64le, set certain options automatically
 ifneq (,$(filter $(ARCH), powerpc64le ppc64le))
 JCFLAGS += -fsigned-char
@@ -1173,6 +1251,27 @@ else
   UTF8PROC_INC := $(build_includedir)
 endif
 
+# When building host tools during cross-compilation (e.g. flisp for iOS),
+# override the compiler and flags to target the build machine instead of the
+# cross-compilation target.  This block must appear after all architecture-
+# and OS-specific flag additions so that it can cleanly replace them.
+ifeq ($(BUILDING_HOST_TOOLS), 1)
+ifeq ($(IOS), 1)
+CC := $(HOSTCC)
+CXX := $(HOSTCXX)
+# Provide the sysroot so that the host compiler (invoked by absolute path
+# via xcrun -f) can locate system headers (stdlib.h, etc.).
+CFLAGS := $(HOST_CFLAGS)
+CXXFLAGS := $(HOST_CXXFLAGS)
+# Reset flags that may contain target-specific options (e.g. -mcrc for
+# aarch64) which are invalid for the host compiler when host != target.
+JCFLAGS := $(JCFLAGS_CLANG)
+JCPPFLAGS := $(JCPPFLAGS_CLANG)
+JCXXFLAGS := $(JCXXFLAGS_CLANG)
+LDFLAGS :=
+endif
+endif
+
 # We need python for things like BB triplet recognition.  We don't really care
 # about version, generally, so just find something that works:
 PYTHON := $(shell which python 2>/dev/null || which python3 2>/dev/null || which python2 2>/dev/null || echo not found)
@@ -1191,6 +1290,10 @@ endif
 
 # BinaryBuilder options.  We default to "on" for all the projects listed in BB_PROJECTS,
 # but only if contrib/normalize_triplet.py works for our requested triplet.
+ifeq ($(IOS), 1)
+# No BinaryBuilder pre-built artifacts are available for iOS; build all deps from source.
+USE_BINARYBUILDER := 0
+else
 ifeq ($(shell $(call invoke_python,$(JULIAHOME)/contrib/normalize_triplet.py) $(or $(XC_HOST),$(XC_HOST),$(BUILD_MACHINE)) >/dev/null 2>/dev/null; echo $$?),0)
 USE_BINARYBUILDER ?= 1
 else
@@ -1198,6 +1301,7 @@ ifneq ($(shell $(call invoke_python,$(JULIAHOME)/contrib/normalize_triplet.py) x
 $(warning normalize_triplet.py appears to be non-functional (used python interpreter "$(PYTHON)"), so BinaryBuilder disabled)
 endif
 USE_BINARYBUILDER ?= 0
+endif
 endif
 
 # Auto-detect triplet once, create different versions that we use as defaults below for each BB install target
@@ -1258,9 +1362,12 @@ $(foreach proj,$(BB_PROJECTS),$(eval $(call SET_BB_DEFAULT,$(proj))))
 
 
 # Warn if the user tries to build something that requires `gfortran` but they don't have it installed.
+# iOS builds don't use gfortran (OpenBLAS/SuiteSparse are built from source with clang).
+ifneq ($(IOS),1)
 ifeq ($(FC_VERSION),)
 ifneq ($(USE_BINARYBUILDER_OPENBLAS)$(USE_BINARYBUILDER_LIBSUITESPARSE),11)
 $(error "Attempting to build OpenBLAS or SuiteSparse without a functioning fortran compiler!")
+endif
 endif
 endif
 
@@ -1359,6 +1466,14 @@ WHOLE_ARCHIVE := -Xlinker -all_load
 NO_WHOLE_ARCHIVE :=
 HAVE_SSP := 1
 JLIBLDFLAGS += -Wl,-compatibility_version,$(SOMAJOR) -Wl,-current_version,$(JULIA_MAJOR_VERSION).$(JULIA_MINOR_VERSION).$(JULIA_PATCH_VERSION)
+ifeq ($(IOS), 1)
+ifneq ($(BUILDING_HOST_TOOLS), 1)
+OSLIBS += -framework UIKit -framework Security
+JCPPFLAGS += -DJL_IOS=1
+# iOS uses the same linker flags but with the iOS SDK
+JLDFLAGS += -arch arm64 -isysroot $(IOS_SDK) $(IOS_VERSION_MIN_FLAG)
+endif
+endif
 endif
 
 ifeq ($(OS), WINNT)
@@ -1570,8 +1685,12 @@ LIBGCC_NAME := libgcc_s_seh-1.$(SHLIB_EXT)
 endif
 endif
 # On macOS, libgcc_s has soversion 1.1 always on aarch64 and only for GCC 12+
-# (-> libgfortran 5) on x86_64
+# (-> libgfortran 5) on x86_64.
+# On iOS, libgcc_s does not exist — Apple's clang runtime (compiler-rt)
+# provides the equivalent functionality.  Leave LIBGCC_NAME empty so that
+# the loader does not try to dlopen it.
 ifeq ($(OS),Darwin)
+ifneq ($(IOS),1)
 ifeq ($(ARCH),aarch64)
 LIBGCC_NAME := libgcc_s.1.1.$(SHLIB_EXT)
 else
@@ -1582,17 +1701,20 @@ LIBGCC_NAME := libgcc_s.1.$(SHLIB_EXT)
 endif
 endif
 endif
+endif
 ifneq ($(findstring $(OS),Linux FreeBSD),)
 LIBGCC_NAME := libgcc_s.$(SHLIB_EXT).1
 endif
 
 # USE_SYSTEM_CSL causes it to get symlinked into build_private_shlibdir
+ifneq ($(LIBGCC_NAME),)
 ifeq ($(USE_SYSTEM_CSL),1)
 LIBGCC_BUILD_DEPLIB := $(call dep_lib_path,$(build_libdir),$(build_private_shlibdir)/$(LIBGCC_NAME))
 else
 LIBGCC_BUILD_DEPLIB := $(call dep_lib_path,$(build_libdir),$(build_shlibdir)/$(LIBGCC_NAME))
 endif
 LIBGCC_INSTALL_DEPLIB := $(call dep_lib_path,$(libdir),$(private_shlibdir)/$(LIBGCC_NAME))
+endif
 
 # We only bother to define this on Linux, as that's the only platform that does libstdc++ probing
 # On all other platforms, the LIBSTDCXX_*_DEPLIB variables will be empty.

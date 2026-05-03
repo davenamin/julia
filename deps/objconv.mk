@@ -14,7 +14,7 @@ $(BUILDDIR)/objconv/source-extracted: $(SRCCACHE)/objconv.zip
 	echo 1 > $@
 
 $(BUILDDIR)/objconv/build-compiled: $(BUILDDIR)/objconv/source-extracted
-	cd $(dir $<) && $(CXX) -o objconv -O2 *.cpp
+	cd $(dir $<) && $(HOSTCXX) $(HOST_CXXFLAGS) -o objconv -O2 *.cpp
 	echo 1 > $@
 
 $(eval $(call staged-install, \

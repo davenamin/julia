@@ -34,7 +34,7 @@ endif
 ifeq ($(USE_BLAS64), 1)
 OPENBLAS_BUILD_OPTS += INTERFACE64=1 SYMBOLSUFFIX="$(OPENBLAS_SYMBOLSUFFIX)" LIBPREFIX="libopenblas$(OPENBLAS_LIBNAMESUFFIX)"
 ifeq ($(OS), Darwin)
-OPENBLAS_BUILD_OPTS += OBJCONV=$(abspath $(build_depsbindir)/objconv)
+OPENBLAS_BUILD_OPTS += OBJCONV="$(SRCDIR)/tools/objconv-fix-alignment.sh $(abspath $(build_depsbindir)/objconv)"
 $(BUILDDIR)/$(OPENBLAS_SRC_DIR)/build-compiled: | $(build_prefix)/manifest/objconv
 endif
 endif
@@ -43,7 +43,12 @@ OPENBLAS_FFLAGS := $(JFFLAGS) $(USE_BLAS_FFLAGS)
 OPENBLAS_CFLAGS := -O2
 
 # Decide whether to build for 32-bit or 64-bit arch
-ifneq ($(BUILD_OS),$(OS))
+ifeq ($(IOS),1)
+# iOS is always a cross-build.  Bake HOST_CFLAGS (macOS sysroot) into
+# HOSTCC so that OpenBLAS host tools (getarch) can find system headers;
+# on modern macOS bare clang cannot locate <stdio.h> without -isysroot.
+OPENBLAS_BUILD_OPTS += OSNAME=$(OS) CROSS=1 HOSTCC="$(HOSTCC) $(HOST_CFLAGS)" CROSS_SUFFIX=
+else ifneq ($(BUILD_OS),$(OS))
 OPENBLAS_BUILD_OPTS += OSNAME=$(OS) CROSS=1 HOSTCC=$(HOSTCC) CROSS_SUFFIX=$(CROSS_COMPILE)
 endif
 ifeq ($(OS),WINNT)
@@ -85,6 +90,15 @@ endif
 # Do not overwrite the "-j" flag
 OPENBLAS_BUILD_OPTS += MAKE_NB_JOBS=0
 
+# OpenBLAS's default "all" target includes "tests", which cannot be
+# built when cross-compiling (linker targets the host, not the device).
+# Build only the shared library (which pulls in libs+netlib) for iOS.
+ifeq ($(IOS),1)
+OPENBLAS_BUILD_TARGET := shared
+else
+OPENBLAS_BUILD_TARGET :=
+endif
+
 $(BUILDDIR)/$(OPENBLAS_SRC_DIR)/openblas-winexit.patch-applied: $(BUILDDIR)/$(OPENBLAS_SRC_DIR)/source-extracted
 	cd $(BUILDDIR)/$(OPENBLAS_SRC_DIR) && \
 		patch -p1 -f < $(SRCDIR)/patches/openblas-winexit.patch
@@ -109,8 +123,8 @@ $(BUILDDIR)/$(OPENBLAS_SRC_DIR)/build-configured: $(BUILDDIR)/$(OPENBLAS_SRC_DIR
 	echo 1 > $@
 
 $(BUILDDIR)/$(OPENBLAS_SRC_DIR)/build-compiled: $(BUILDDIR)/$(OPENBLAS_SRC_DIR)/build-configured
-	echo $(MAKE) -C $(dir $<) $(OPENBLAS_BUILD_OPTS) # echo first, so we only print the error message below in a failure case
-	@$(MAKE) -C $(dir $<) $(OPENBLAS_BUILD_OPTS) || (echo $(WARNCOLOR)"*** Clean the OpenBLAS build with 'make -C deps clean-openblas'. Rebuild with 'make OPENBLAS_USE_THREAD=0' if OpenBLAS had trouble linking libpthread.so, and with 'make OPENBLAS_TARGET_ARCH=NEHALEM' if there were errors building SandyBridge support. Both these options can also be used simultaneously. ***"$(ENDCOLOR) && false)
+	echo $(MAKE) -C $(dir $<) $(OPENBLAS_BUILD_OPTS) $(OPENBLAS_BUILD_TARGET) # echo first, so we only print the error message below in a failure case
+	@$(MAKE) -C $(dir $<) $(OPENBLAS_BUILD_OPTS) $(OPENBLAS_BUILD_TARGET) || (echo $(WARNCOLOR)"*** Clean the OpenBLAS build with 'make -C deps clean-openblas'. Rebuild with 'make OPENBLAS_USE_THREAD=0' if OpenBLAS had trouble linking libpthread.so, and with 'make OPENBLAS_TARGET_ARCH=NEHALEM' if there were errors building SandyBridge support. Both these options can also be used simultaneously. ***"$(ENDCOLOR) && false)
 	echo 1 > $@
 
 define OPENBLAS_INSTALL
