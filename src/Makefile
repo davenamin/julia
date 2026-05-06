@@ -160,7 +160,9 @@ LLVM_CXXFLAGS := -I$(build_includedir) -std=c++17 -fno-exceptions -fno-rtti \
     -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -DNDEBUG
 # Static LLVM libraries for libjulia-internal
 # (APInt-C, coverage, processor, runtime_ccall, gc-heap-snapshot use LLVMSupport)
-RT_LLVMLINK := $(LLVM_LDFLAGS) -lLLVMTargetParser -lLLVMSupport -lLLVMDemangle -lz
+# In LLVM 15, Triple/host-detection symbols still live in LLVMSupport; the
+# separate LLVMTargetParser archive only exists from LLVM 16 onwards.
+RT_LLVMLINK := $(LLVM_LDFLAGS) -lLLVMSupport -lLLVMDemangle -lz
 # Shared LLVM library for libjulia-codegen
 CG_LLVMLINK := $(LLVM_LDFLAGS) -lLLVM
 endif # IOS
