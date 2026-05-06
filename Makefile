@@ -114,7 +114,15 @@ julia-sysimg-bc : julia-stdlib julia-base julia-cli-$(JULIA_BUILD_MODE) julia-sr
 julia-sysimg-release julia-sysimg-debug : julia-sysimg-% : julia-sysimg-ji julia-src-%
 	@$(MAKE) $(QUIET_MAKE) -C $(BUILDROOT) -f sysimage.mk sysimg-$*
 
+ifeq ($(IOS), 1)
+# iOS cross-compile: no host-runnable julia, so we can't bootstrap the
+# sysimage or the libccalltest/libllvmcalltest shims.  Build only the
+# shared libraries (matches what contrib/ios/Makefile already does for
+# its own build-julia target).
+julia-debug julia-release : julia-% : julia-src-% julia-symlink
+else
 julia-debug julia-release : julia-% : julia-sysimg-% julia-src-% julia-symlink julia-libccalltest julia-libllvmcalltest julia-base-cache
+endif
 
 stdlibs-cache-release stdlibs-cache-debug : stdlibs-cache-% : julia-%
 	@$(MAKE) $(QUIET_MAKE) -C $(BUILDROOT) -f pkgimage.mk all-$*
