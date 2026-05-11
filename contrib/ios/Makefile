@@ -178,8 +178,36 @@ install-libs: | $(framework_destdirs)
 		done; \
 	done
 
-# Codesign the framework
+# Codesign the framework.
+#
+# Apple's AMFI (Apple Mobile File Integrity) checks every Mach-O image on
+# dlopen() and refuses to map any binary without its own valid embedded
+# LC_CODE_SIGNATURE.  Signing the framework root alone signs only the
+# framework binary and writes a CodeResources manifest — the bundled
+# dylibs inside (libLLVM, libopenblas, libgmp, sys.dylib, ...) carry no
+# signature of their own and would fail dlopen at runtime on iOS.
+#
+# Sign bottom-up: each leaf dylib first, then the framework binary, then
+# the framework root (so its CodeResources reflects the signed contents).
 codesign:
+	@# 1. Sign every bundled dylib individually.  Skip symlinks so we
+	@#    don't re-sign the same underlying file under multiple names.
+	@for lib in $(IOS_FWDIR)/*.$(SHLIB_EXT); do \
+		[ -f "$$lib" ] && [ ! -L "$$lib" ] || continue; \
+		codesign -s "$(DARWIN_CODESIGN_KEYCHAIN_IDENTITY)" -f \
+			--timestamp=none "$$lib" || exit 1; \
+	done
+	@# 2. Sign the sysimage explicitly (its name doesn't always match the
+	@#    *.$(SHLIB_EXT) glob if the build laid it out differently).
+	@if [ -f $(IOS_FWDIR)/sys.$(SHLIB_EXT) ] && [ ! -L $(IOS_FWDIR)/sys.$(SHLIB_EXT) ]; then \
+		codesign -s "$(DARWIN_CODESIGN_KEYCHAIN_IDENTITY)" -f \
+			--timestamp=none $(IOS_FWDIR)/sys.$(SHLIB_EXT) || exit 1; \
+	fi
+	@# 3. Sign the framework's main binary.
+	codesign -s "$(DARWIN_CODESIGN_KEYCHAIN_IDENTITY)" -f \
+		--timestamp=none $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME)
+	@# 4. Sign the framework root last so CodeResources records hashes
+	@#    of the now-signed contents.
 	codesign -s "$(DARWIN_CODESIGN_KEYCHAIN_IDENTITY)" -f \
 		$(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)
 
