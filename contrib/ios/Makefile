@@ -220,6 +220,22 @@ framework: build-julia \
 	@echo "iOS framework built successfully ($(IOS_PLATFORM)):"
 	@echo "  $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)"
 	@echo ""
+	@echo "To embed in an Xcode app:"
+	@echo "  1. Drag $(IOS_FRAMEWORK_NAME).framework into the target's 'Frameworks,"
+	@echo "     Libraries, and Embedded Content' list with 'Embed & Sign' selected."
+	@echo "  2. For device / App Store builds (ad-hoc signing only works on the"
+	@echo "     simulator), choose one of:"
+	@echo "       (A) Re-build this framework passing your Apple identity, e.g."
+	@echo "             make IOS=1 ios-framework \\"
+	@echo "               DARWIN_CODESIGN_KEYCHAIN_IDENTITY=\"Apple Development: ...\""
+	@echo "           Then Xcode's Embed phase signs the framework root with the same"
+	@echo "           identity and the internal dylibs already match."
+	@echo "       (B) Add a 'Run Script' build phase after 'Embed Frameworks' that"
+	@echo "           invokes contrib/ios/resign-internal-dylibs.sh.  The script"
+	@echo "           walks the embedded framework, re-signs each internal dylib"
+	@echo "           with the app's identity (\$$EXPANDED_CODE_SIGN_IDENTITY), and"
+	@echo "           re-signs the framework root so CodeResources reflects them."
+	@echo ""
 
 # XCFramework — combines pre-built device and simulator frameworks.
 #
