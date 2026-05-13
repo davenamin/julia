@@ -55,15 +55,15 @@ build_slice() {
         make -C "$JULIA_SRC" O="$builddir" configure
     fi
 
-    # Build only the shared libraries.  The default julia-release target would
-    # pull in julia-sysimg-release, which would try to invoke the (iOS-targeted)
-    # julia executable on the host.  Our top-level Makefile auto-skips that on
-    # IOS=1, but pin the explicit target here for clarity.
+    # Build the libraries + iOS sysimage (default julia-release on iOS now
+    # includes a sysimg-ios pass driven by sysimage-ios.mk, which uses a host
+    # julia for the bake stages and --target=arm64-apple-iosX for cross-emit).
+    # Set NO_SYSIMAGE=1 for a libraries-only build.
     make -C "$builddir" \
          IOS=1 IOS_PLATFORM="$platform" IOS_VERSION_MIN="$IOS_VERSION_MIN" \
          IOS_FRAMEWORK_NAME="$FRAMEWORK_NAME" \
          -j "$JOBS" \
-         julia-src-release
+         julia-release
 
     # Bundle the libraries into a .framework at $install_prefix/$FRAMEWORK_NAME.framework.
     make -C "$JULIA_SRC/contrib/ios" \

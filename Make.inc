@@ -223,6 +223,20 @@ DARWIN_FRAMEWORK ?= 0
 # Requires Xcode and the iOS SDK to be installed.
 IOS ?= 0
 
+# Whether to also build an iOS-targeted sysimage (sys.dylib) when IOS=1.
+# Set NO_SYSIMAGE=1 to opt out (libraries-only build is significantly
+# faster).  Building the sysimage requires a host-runnable Julia, which
+# is constructed automatically via BUILDING_HOST_TOOLS=1 alongside the
+# iOS cross-compile.
+IOS_SYSIMAGE ?= 1
+ifeq ($(NO_SYSIMAGE),1)
+override IOS_SYSIMAGE := 0
+endif
+
+# Host-runnable Julia used to bake the iOS sysimage native code.
+# Produced by the `julia-host-tools` recursive-make pass.
+HOST_JULIA := $(BUILDROOT)/usr/host/bin/julia
+
 # Override in Make.user to customize the framework:
 FRAMEWORK_NAME ?= Julia
 FRAMEWORK_VERSION ?= $(JULIA_MAJOR_VERSION).$(JULIA_MINOR_VERSION)
