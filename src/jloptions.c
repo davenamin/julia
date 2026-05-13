@@ -38,6 +38,7 @@ JL_DLLEXPORT void jl_init_options(void)
                         NULL, // cmds
                         NULL, // image_file (will be filled in below)
                         NULL, // cpu_target ("native", "core2", etc...)
+                        NULL, // target (LLVM target triple for --output-o cross-emit)
                         0,    // nthreadpools
                         0,    // nthreads
                         0,    // nmarkthreads
@@ -151,6 +152,9 @@ static const char opts[]  =
 
     // code generation options
     " -C, --cpu-target <target>  Limit usage of CPU features up to <target>; set to `help` to see the available options\n"
+    " --target <triple>          Override the LLVM target triple used when emitting an --output-o\n"
+    "                            object (e.g. arm64-apple-ios14.0).  Used for cross-compilation;\n"
+    "                            defaults to the host triple.\n"
     " -O, --optimize={0,1,2*,3}  Set the optimization level (level 3 if `-O` is used without a level) ($)\n"
     " --min-optlevel={0*,1,2,3}  Set a lower bound on the optimization level\n"
 #ifdef JL_DEBUG_BUILD
@@ -258,7 +262,8 @@ JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
            opt_strip_ir,
            opt_heap_size_hint,
            opt_gc_threads,
-           opt_permalloc_pkgimg
+           opt_permalloc_pkgimg,
+           opt_target
     };
     static const char* const shortopts = "+vhqH:e:E:L:J:C:it:p:O:g:";
     static const struct option longopts[] = {
@@ -281,6 +286,7 @@ JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
         { "compiled-modules",required_argument, 0, opt_compiled_modules },
         { "pkgimages",       required_argument, 0, opt_pkgimages },
         { "cpu-target",      required_argument, 0, 'C' },
+        { "target",          required_argument, 0, opt_target },
         { "procs",           required_argument, 0, 'p' },
         { "threads",         required_argument, 0, 't' },
         { "gcthreads",       required_argument, 0, opt_gc_threads },
@@ -475,6 +481,11 @@ restart_switch:
         case 'C': // cpu-target
             jl_options.cpu_target = strdup(optarg);
             if (!jl_options.cpu_target)
+                jl_error("julia: failed to allocate memory");
+            break;
+        case opt_target: // --target=<triple>
+            jl_options.target = strdup(optarg);
+            if (!jl_options.target)
                 jl_error("julia: failed to allocate memory");
             break;
         case 't': // threads

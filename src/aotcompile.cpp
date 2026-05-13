@@ -1499,17 +1499,31 @@ void jl_dump_native_impl(void *native_code,
     // want less optimizations there.
     // make sure to emit the native object format, even if FORCE_ELF was set in codegen
     Triple TheTriple(data->M.withModuleDo([](Module &M) { return M.getTargetTriple(); }));
+    // Honor --target=<triple> override: clang-style late re-anchoring of the
+    // emission target.  Codegen ran with the host triple, but MC respects a
+    // late triple change for object emission.  Used for cross-compilation
+    // (e.g. host arm64-apple-darwin -> arm64-apple-ios14.0 for iOS sysimages).
+    const bool target_override =
+        (jl_options.target != NULL && jl_options.target[0] != '\0');
+    if (target_override) {
+        TheTriple = Triple(jl_options.target);
+    }
     if (TheTriple.isOSWindows()) {
         TheTriple.setObjectFormat(Triple::COFF);
     } else if (TheTriple.isOSDarwin()) {
         TheTriple.setObjectFormat(Triple::MachO);
-        SmallString<16> Str;
-        Str += "macosx";
-        if (TheTriple.isAArch64())
-            Str += "11.0.0"; // Update this if MACOSX_VERSION_MIN changes
-        else
-            Str += "10.14.0";
-        TheTriple.setOSName(Str);
+        if (!target_override) {
+            // Only auto-tag the macOS version when the user did not supply an
+            // explicit triple; otherwise trust the user's OS/version (iOS,
+            // tvOS, etc. all keep MachO but must not be relabeled to macosx).
+            SmallString<16> Str;
+            Str += "macosx";
+            if (TheTriple.isAArch64())
+                Str += "11.0.0"; // Update this if MACOSX_VERSION_MIN changes
+            else
+                Str += "10.14.0";
+            TheTriple.setOSName(Str);
+        }
     }
     Optional<Reloc::Model> RelocModel;
     if (TheTriple.isOSLinux() || TheTriple.isOSFreeBSD()) {
@@ -1520,8 +1534,22 @@ void jl_dump_native_impl(void *native_code,
         // On PPC the small model is limited to 16bit offsets
         CMModel = CodeModel::Medium;
     }
+    // When a --target override is in play, the host ExecutionEngine's cached
+    // Target points at the wrong architecture; do a fresh lookup against the
+    // user-supplied triple.
+    const llvm::Target *TheTarget;
+    if (target_override) {
+        std::string errorstr;
+        TheTarget = TargetRegistry::lookupTarget("", TheTriple, errorstr);
+        if (!TheTarget) {
+            jl_errorf("--target='%s' lookup failed: %s",
+                      jl_options.target, errorstr.c_str());
+        }
+    } else {
+        TheTarget = &jl_ExecutionEngine->getTarget();
+    }
     std::unique_ptr<TargetMachine> SourceTM(
-        jl_ExecutionEngine->getTarget().createTargetMachine(
+        TheTarget->createTargetMachine(
             TheTriple.getTriple(),
             jl_ExecutionEngine->getTargetCPU(),
             jl_ExecutionEngine->getTargetFeatureString(),
