@@ -123,12 +123,14 @@ LLVM_CMAKE += -DCMAKE_OSX_ARCHITECTURES=arm64
 LLVM_CMAKE += -DCMAKE_OSX_DEPLOYMENT_TARGET=$(IOS_VERSION_MIN)
 # If a pre-built host llvm-tblgen exists (BinaryBuilder ships one under
 # $(JULIAHOME)/usr/tools/ after a standard in-tree host build), point LLVM's
-# cross-compile at it via LLVM_NATIVE_TOOL_DIR.  This skips the NATIVE/tblgen
+# cross-compile at it via LLVM_TABLEGEN.  This skips the NATIVE/tblgen
 # sub-build entirely — that sub-build compiles LLVM 15's source against the
 # macOS Xcode SDK's libc++, which fails on Xcode 26+ due to a libc++
 # <stddef.h> include-order strictness not fixed until LLVM 16.
+# (LLVM_NATIVE_TOOL_DIR was added in LLVM 18; LLVM 15 uses LLVM_TABLEGEN
+# which takes the path to the binary, not the containing directory.)
 ifneq ($(wildcard $(JULIAHOME)/usr/tools/llvm-tblgen),)
-LLVM_CMAKE += -DLLVM_NATIVE_TOOL_DIR=$(JULIAHOME)/usr/tools
+LLVM_CMAKE += -DLLVM_TABLEGEN=$(JULIAHOME)/usr/tools/llvm-tblgen
 endif
 endif # IOS
 ifeq ($(USE_LLVM_SHLIB),1)
