@@ -1,9 +1,19 @@
 # Cross-target sysimage build for iOS.
 #
-# Mirrors sysimage.mk but uses a host-runnable Julia (built into
-# $(BUILDROOT)/usr/host/ via BUILDING_HOST_TOOLS=1) for the bake stages,
-# and the new --target=<triple> CLI flag (added in src/jloptions.c) so
-# that --output-o emits an iOS arm64 object instead of a host-darwin one.
+# Mirrors sysimage.mk but uses the in-tree host julia (at
+# $(JULIAHOME)/usr/bin/julia, produced by a standard `make` in the source
+# tree without IOS=1) for the bake stages, and the --target=<triple> CLI
+# flag (added in src/jloptions.c) so --output-o emits an iOS arm64 object
+# instead of a host-darwin one.
+#
+# Expected workflow:
+#   cd $(JULIAHOME) && make                     # host build (one-time)
+#   make O=build-ios-device configure           # out-of-tree iOS BUILDROOT
+#   make -C build-ios-device IOS=1 julia-release
+#
+# In-tree iOS builds (BUILDROOT == JULIAHOME with IOS=1) would clobber
+# the host's usr/lib/libjulia.dylib + sys.dylib and break the host julia;
+# we error out in that case below.
 #
 # Stages:
 #   1. corecompiler.ji  — host julia, platform-neutral IR.
@@ -19,6 +29,15 @@ BUILDDIR := .
 JULIAHOME := $(SRCDIR)
 include $(JULIAHOME)/Make.inc
 
+# Guard against in-tree iOS builds (would clobber the host julia).
+ifeq ($(abspath $(BUILDROOT)),$(abspath $(JULIAHOME)))
+$(error iOS sysimage build requires an out-of-tree BUILDROOT — \
+        running IOS=1 in-tree would overwrite the host julia at \
+        $(JULIAHOME)/usr/.  Run `make O=build-ios-device configure` \
+        and `make -C build-ios-device IOS=1 ...` instead, \
+        or set NO_SYSIMAGE=1 to skip sysimage generation)
+endif
+
 default: sysimg-ios-$(JULIA_BUILD_MODE)
 all: sysimg-ios-release sysimg-ios-debug
 sysimg-ios-release: $(build_private_libdir)/sys.$(SHLIB_EXT)
@@ -31,8 +50,8 @@ IOS_TRIPLE := arm64-apple-ios$(IOS_VERSION_MIN)
 # top-level iOS gate which is itself evaluated even on non-IOS makes).
 IOS_LINKER = $(shell xcrun --sdk $(IOS_PLATFORM) -f clang 2>/dev/null)
 
-# Env vars pointing the host julia at its own bindir / sysimage / depot.
-HOST_JULIA_ENV := JULIA_BINDIR=$(BUILDROOT)/usr/host/bin \
+# Env vars pointing the host julia at its in-tree bindir / sysimage / depot.
+HOST_JULIA_ENV := JULIA_BINDIR=$(JULIAHOME)/usr/bin \
                  JULIA_LOAD_PATH=@stdlib \
                  JULIA_PROJECT= \
                  JULIA_DEPOT_PATH=: \
@@ -50,12 +69,24 @@ COMPILER_SRCS += $(shell find $(JULIAHOME)/base/compiler -name \*.jl)
 BASE_SRCS := $(sort $(shell find $(JULIAHOME)/base -name \*.jl -and -not -name sysimg.jl) \
                     $(shell find $(BUILDROOT)/base -name \*.jl -and -not -name sysimg.jl))
 STDLIB_SRCS := $(JULIAHOME)/base/sysimg.jl \
-               $(shell find $(BUILDROOT)/usr/host/share/julia/stdlib/$(VERSDIR)/*/src -name \*.jl 2>/dev/null) \
-               $(wildcard $(BUILDROOT)/usr/host/manifest/$(VERSDIR)/*)
+               $(shell find $(JULIAHOME)/usr/share/julia/stdlib/$(VERSDIR)/*/src -name \*.jl 2>/dev/null) \
+               $(wildcard $(JULIAHOME)/usr/manifest/$(VERSDIR)/*)
 RELBUILDROOT := $(call rel_path,$(JULIAHOME)/base,$(BUILDROOT)/base)/
+
+# Recipe-time check that the in-tree host julia exists.  Run as the
+# first step of every stage that invokes $(HOST_JULIA).
+define check_host_julia
+@if [ ! -x "$(HOST_JULIA)" ]; then \
+    echo "ERROR: host julia not found at $(HOST_JULIA)." >&2; \
+    echo "       Run \`make\` from $(JULIAHOME) (without IOS=1) first" >&2; \
+    echo "       to produce the host julia used to bake the iOS sysimage." >&2; \
+    exit 1; \
+fi
+endef
 
 # Stage 1: corecompiler.ji — platform-neutral IR for the core compiler.
 $(build_private_libdir)/corecompiler.ji: $(COMPILER_SRCS)
+	$(call check_host_julia)
 	@$(call PRINT_JULIA, cd $(JULIAHOME)/base && \
 	$(HOST_JULIA_ENV) $(HOST_JULIA) -C apple-m1 $(HEAPLIM) \
 		--output-ji $@.tmp \

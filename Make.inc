@@ -234,8 +234,12 @@ override IOS_SYSIMAGE := 0
 endif
 
 # Host-runnable Julia used to bake the iOS sysimage native code.
-# Produced by the `julia-host-tools` recursive-make pass.
-HOST_JULIA := $(BUILDROOT)/usr/host/bin/julia
+# Expects the standard in-tree host build (run `make` from $(JULIAHOME)
+# without IOS=1) to have produced $(JULIAHOME)/usr/bin/julia.  Both iOS
+# slices (device + simulator) share this single host julia; the iOS
+# builds themselves run out-of-tree (make O=<dir> configure ; make -C <dir>
+# IOS=1) so they don't clobber the in-tree host's usr/.
+HOST_JULIA := $(JULIAHOME)/usr/bin/julia
 
 # Override in Make.user to customize the framework:
 FRAMEWORK_NAME ?= Julia

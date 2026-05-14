@@ -115,24 +115,20 @@ julia-sysimg-release julia-sysimg-debug : julia-sysimg-% : julia-sysimg-ji julia
 	@$(MAKE) $(QUIET_MAKE) -C $(BUILDROOT) -f sysimage.mk sysimg-$*
 
 ifeq ($(IOS), 1)
-# iOS cross-compile: no host-runnable julia, so we can't bootstrap the
-# sysimage or the libccalltest/libllvmcalltest shims directly.  Build
-# the libraries; when IOS_SYSIMAGE=1 also drive sysimage generation
-# through a host julia built via BUILDING_HOST_TOOLS=1.
+# iOS cross-compile: no host-runnable julia in the iOS BUILDROOT, so we
+# can't bootstrap the sysimage or the libccalltest/libllvmcalltest shims
+# directly.  Build the libraries; when IOS_SYSIMAGE=1 also drive sysimage
+# generation by re-using the in-tree host julia at $(JULIAHOME)/usr/bin/julia
+# (produced by a standard `make` in the source tree, without IOS=1).
  ifeq ($(IOS_SYSIMAGE), 1)
-julia-debug julia-release : julia-% : julia-host-tools julia-src-% julia-sysimg-ios-% julia-symlink
+julia-debug julia-release : julia-% : julia-src-% julia-sysimg-ios-% julia-symlink
  else
 julia-debug julia-release : julia-% : julia-src-% julia-symlink
  endif
 
-# Build a complete host-runnable Julia (macOS-native) into $(BUILDROOT)/usr/host/
-# by recursively invoking make with BUILDING_HOST_TOOLS=1.  Provides $(HOST_JULIA).
-julia-host-tools:
-	$(MAKE) -C $(JULIAHOME) BUILDING_HOST_TOOLS=1 BUILDROOT=$(BUILDROOT) julia-release
-
 # iOS sysimage targets — driven by sysimage-ios.mk, which mirrors sysimage.mk
-# but uses the host julia for bake stages and cross-emits via --target.
-julia-sysimg-ios-release julia-sysimg-ios-debug : julia-sysimg-ios-% : julia-src-% julia-host-tools | $(build_private_libdir)
+# but invokes $(HOST_JULIA) for the bake stages and cross-emits via --target.
+julia-sysimg-ios-release julia-sysimg-ios-debug : julia-sysimg-ios-% : julia-src-% | $(build_private_libdir)
 	@$(MAKE) $(QUIET_MAKE) -C $(BUILDROOT) -f $(JULIAHOME)/sysimage-ios.mk sysimg-ios-$*
 else
 julia-debug julia-release : julia-% : julia-sysimg-% julia-src-% julia-symlink julia-libccalltest julia-libllvmcalltest julia-base-cache
