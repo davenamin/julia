@@ -140,6 +140,6 @@ $(build_private_libdir)/%.$(SHLIB_EXT): $(build_private_libdir)/%-o.a
 		-arch arm64 -mios-version-min=$(IOS_VERSION_MIN) -isysroot $(IOS_SDK) \
 		-Wl,-install_name,@rpath/$(FRAMEWORK_NAME).framework/$(notdir $@) \
 		-L$(build_private_libdir) -L$(build_libdir) -L$(build_shlibdir) \
-		-Wl,-force_load,$< \
+		$(WHOLE_ARCHIVE) $< $(NO_WHOLE_ARCHIVE) \
 		$(if $(findstring -debug,$(notdir $@)),-ljulia-internal-debug -ljulia-debug,-ljulia-internal -ljulia) \
 		-o $@)
