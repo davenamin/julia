@@ -136,10 +136,15 @@ $(build_private_libdir)/%.$(SHLIB_EXT): $(build_private_libdir)/%-o.a
 		echo "ERROR: xcrun could not locate clang for SDK '$(IOS_PLATFORM)'.  Install Xcode + iOS SDK." >&2; \
 		exit 1; \
 	fi
+	@# NOTE: embedded commas in -Wl,-install_name,... would be parsed by
+	@# $(call ...) as additional macro arguments, dropping everything past
+	@# the first comma in the payload (PRINT_LINK only emits $1).  Set the
+	@# install_name as a separate post-link step instead, mirroring the
+	@# pattern used by the regular sysimage.mk's link rule.
 	@$(call PRINT_LINK, $(IOS_LINKER) -dynamiclib \
 		-arch arm64 -mios-version-min=$(IOS_VERSION_MIN) -isysroot $(IOS_SDK) \
-		-Wl,-install_name,@rpath/$(FRAMEWORK_NAME).framework/$(notdir $@) \
 		-L$(build_private_libdir) -L$(build_libdir) -L$(build_shlibdir) \
 		$(WHOLE_ARCHIVE) $< $(NO_WHOLE_ARCHIVE) \
 		$(if $(findstring -debug,$(notdir $@)),-ljulia-internal-debug -ljulia-debug,-ljulia-internal -ljulia) \
 		-o $@)
+	@install_name_tool -id @rpath/$(FRAMEWORK_NAME).framework/$(notdir $@) $@
