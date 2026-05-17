@@ -128,7 +128,10 @@ julia-debug julia-release : julia-% : julia-src-% julia-symlink
 
 # iOS sysimage targets — driven by sysimage-ios.mk, which mirrors sysimage.mk
 # but invokes $(HOST_JULIA) for the bake stages and cross-emits via --target.
-julia-sysimg-ios-release julia-sysimg-ios-debug : julia-sysimg-ios-% : julia-src-% | $(build_private_libdir)
+# Depends on julia-stdlib + julia-base so that $(BUILDROOT)/base/build_h.jl
+# and $(BUILDROOT)/usr/share/julia/stdlib/ exist before the host julia tries
+# to load them during the sys.ji bake.
+julia-sysimg-ios-release julia-sysimg-ios-debug : julia-sysimg-ios-% : julia-stdlib julia-base julia-src-% | $(build_private_libdir)
 	@$(MAKE) $(QUIET_MAKE) -C $(BUILDROOT) -f $(JULIAHOME)/sysimage-ios.mk sysimg-ios-$*
 else
 julia-debug julia-release : julia-% : julia-sysimg-% julia-src-% julia-symlink julia-libccalltest julia-libllvmcalltest julia-base-cache
