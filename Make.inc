@@ -1176,6 +1176,16 @@ LLVM_CONFIG_HOST = $(LLVM_CONFIG_PATH_FIX) $(call spawn,$(LLVM_CONFIG))
 endif
 endif
 
+# iOS cross-build override: the BUILD_OS == OS branch above resolves
+# LLVM_CONFIG_HOST to the cross-built (iOS arm64) llvm-config, which can't
+# run on the macOS host.  Use the in-tree host build's llvm-config
+# (at $(JULIAHOME)/usr/tools/llvm-config) instead, when present.
+ifeq ($(IOS), 1)
+ifneq ($(wildcard $(JULIAHOME)/usr/tools/llvm-config),)
+LLVM_CONFIG_HOST := $(JULIAHOME)/usr/tools/llvm-config
+endif
+endif
+
 ifeq ($(USE_SYSTEM_PCRE), 1)
 PCRE_CONFIG := pcre2-config
 else
