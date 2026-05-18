@@ -46,6 +46,13 @@ sysimg-ios-debug: $(build_private_libdir)/sys-debug.$(SHLIB_EXT)
 VERSDIR := v$(shell cut -d. -f1-2 < $(JULIAHOME)/VERSION)
 
 IOS_TRIPLE := arm64-apple-ios$(IOS_VERSION_MIN)
+# Simulator slice needs the -simulator suffix on the triple so the LLVM
+# AArch64 backend emits a Mach-O with platform marker LC_BUILD_VERSION =
+# iOSSimulator (not iOS); otherwise stage 4 link fails with
+# `building for 'iOS' but linking in dylib built for 'iOS-simulator'`.
+ifeq ($(IOS_PLATFORM),iphonesimulator)
+IOS_TRIPLE := $(IOS_TRIPLE)-simulator
+endif
 # Resolve at recipe time, not parse time (this file is referenced by the
 # top-level iOS gate which is itself evaluated even on non-IOS makes).
 IOS_LINKER = $(shell xcrun --sdk $(IOS_PLATFORM) -f clang 2>/dev/null)
@@ -142,7 +149,7 @@ $(build_private_libdir)/%.$(SHLIB_EXT): $(build_private_libdir)/%-o.a
 	@# install_name as a separate post-link step instead, mirroring the
 	@# pattern used by the regular sysimage.mk's link rule.
 	@$(call PRINT_LINK, $(IOS_LINKER) -dynamiclib \
-		-arch arm64 -mios-version-min=$(IOS_VERSION_MIN) -isysroot $(IOS_SDK) \
+		-arch arm64 $(IOS_VERSION_MIN_FLAG) -isysroot $(IOS_SDK) \
 		-L$(build_private_libdir) -L$(build_libdir) -L$(build_shlibdir) \
 		$(WHOLE_ARCHIVE) $< $(NO_WHOLE_ARCHIVE) \
 		$(if $(findstring -debug,$(notdir $@)),-ljulia-internal-debug -ljulia-debug,-ljulia-internal -ljulia) \
