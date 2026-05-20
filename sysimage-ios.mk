@@ -64,6 +64,15 @@ HOST_JULIA_ENV := JULIA_BINDIR=$(JULIAHOME)/usr/bin \
                  JULIA_DEPOT_PATH=: \
                  JULIA_NUM_THREADS=1
 
+# Optional: extra Julia code baked into the iOS sysimage at stage 3.  Set
+# IOS_SYSIMAGE_EXTRA_JL=/abs/path/to/extras.jl (or a space-separated list of
+# paths) and each file is loaded via the host julia's -L flag before
+# generate_precompile.jl runs.  At that point sys.ji is loaded as the
+# sysimage, so Base + every stdlib are available — your file can `using ...`,
+# define modules / methods / consts, and even call them to get those calls
+# precompiled into the resulting sys.dylib's native code.
+IOS_SYSIMAGE_EXTRA_JL ?=
+
 COMPILER_SRCS := $(addprefix $(JULIAHOME)/, \
 		base/boot.jl base/docs/core.jl base/abstractarray.jl base/abstractdict.jl \
 		base/array.jl base/bitarray.jl base/bitset.jl base/bool.jl base/ctypes.jl \
@@ -124,7 +133,9 @@ $$(build_private_libdir)/sys$1-o.a : $$(build_private_libdir)/sys.ji $$(JULIAHOM
 			--target=$(IOS_TRIPLE) \
 			--output-o $$@.tmp $$(JULIA_SYSIMG_BUILD_FLAGS) \
 			--startup-file=no --warn-overwrite=yes \
-			--sysimage $$< $$(JULIAHOME)/contrib/generate_precompile.jl $(JULIA_PRECOMPILE); then \
+			--sysimage $$< \
+			$(foreach extra,$(IOS_SYSIMAGE_EXTRA_JL),-L $(extra)) \
+			$$(JULIAHOME)/contrib/generate_precompile.jl $(JULIA_PRECOMPILE); then \
 		echo '*** iOS sysimage stage 3 (sys$1-o.a) failed.  Try `make cleanall`. ***'; \
 		false; \
 	fi )
