@@ -41,6 +41,28 @@ command -v xcodebuild >/dev/null 2>&1 || { echo "ERROR: install Xcode" >&2; exit
 xcrun --sdk iphoneos        --show-sdk-path >/dev/null 2>&1 || { echo "ERROR: iphoneos SDK not found" >&2; exit 1; }
 xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1 || { echo "ERROR: iphonesimulator SDK not found" >&2; exit 1; }
 
+# Ensure the in-tree host julia exists.  Both iOS slices share this single
+# host julia for sysimage bake; the iOS builds themselves run out-of-tree
+# (DEVICE_BUILDDIR / SIM_BUILDDIR), so the host's $JULIA_SRC/usr/ is not
+# clobbered by either iOS slice.
+ensure_host_julia() {
+    local host_julia="$JULIA_SRC/usr/bin/julia"
+    if [[ -x "$host_julia" ]]; then
+        echo "==> Using in-tree host julia at $host_julia"
+        return
+    fi
+    echo
+    echo "==> Host julia not found at $host_julia"
+    echo "==> Running in-tree host build (one-time, shared by both iOS slices)"
+    echo "    JOBS=$JOBS"
+    make -C "$JULIA_SRC" -j "$JOBS"
+    [[ -x "$host_julia" ]] || {
+        echo "ERROR: host build completed but $host_julia is still missing" >&2
+        exit 1
+    }
+}
+ensure_host_julia
+
 build_slice() {
     local platform="$1"
     local builddir="$2"
@@ -55,15 +77,15 @@ build_slice() {
         make -C "$JULIA_SRC" O="$builddir" configure
     fi
 
-    # Build only the shared libraries.  The default julia-release target would
-    # pull in julia-sysimg-release, which would try to invoke the (iOS-targeted)
-    # julia executable on the host.  Our top-level Makefile auto-skips that on
-    # IOS=1, but pin the explicit target here for clarity.
+    # Build the libraries + iOS sysimage (default julia-release on iOS now
+    # includes a sysimg-ios pass driven by sysimage-ios.mk, which uses a host
+    # julia for the bake stages and --target=arm64-apple-iosX for cross-emit).
+    # Set NO_SYSIMAGE=1 for a libraries-only build.
     make -C "$builddir" \
          IOS=1 IOS_PLATFORM="$platform" IOS_VERSION_MIN="$IOS_VERSION_MIN" \
          IOS_FRAMEWORK_NAME="$FRAMEWORK_NAME" \
          -j "$JOBS" \
-         julia-src-release
+         julia-release
 
     # Bundle the libraries into a .framework at $install_prefix/$FRAMEWORK_NAME.framework.
     make -C "$JULIA_SRC/contrib/ios" \
