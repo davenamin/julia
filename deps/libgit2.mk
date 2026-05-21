@@ -13,10 +13,21 @@ ifeq ($(USE_SYSTEM_MBEDTLS), 0)
 $(BUILDDIR)/$(LIBGIT2_SRC_DIR)/build-configured: | $(build_prefix)/manifest/mbedtls
 endif
 
-LIBGIT2_OPTS := $(CMAKE_COMMON) -DCMAKE_BUILD_TYPE=Release -DUSE_THREADS=ON -DUSE_BUNDLED_ZLIB=ON -DUSE_SSH=ON -DBUILD_CLI=OFF
+ifeq ($(USE_SYSTEM_ZLIB), 0)
+$(BUILDDIR)/$(LIBGIT2_SRC_DIR)/build-configured: | $(build_prefix)/manifest/zlib
+endif
+
+LIBGIT2_OPTS := $(CMAKE_COMMON) -DCMAKE_BUILD_TYPE=Release -DUSE_THREADS=ON -DUSE_BUNDLED_ZLIB=OFF -DUSE_SSH=ON -DBUILD_CLI=OFF
 ifeq ($(IOS),1)
 # system() is unavailable on iOS; skip building the test suite.
 LIBGIT2_OPTS += -DBUILD_TESTS=OFF
+# iPhoneOS SDK ships getentropy() in libSystem but does not ship
+# <sys/random.h> as a public header.  libgit2's check_function_exists
+# detection passes (link test succeeds), GIT_RAND_GETENTROPY gets
+# defined, and src/util/rand.c then fails to include the missing
+# header.  Pre-seed the cache variable so the detection is skipped and
+# rand.c falls through to its /dev/urandom backend.
+LIBGIT2_OPTS += -DGIT_RAND_GETENTROPY:BOOL=FALSE
 endif
 ifeq ($(OS),WINNT)
 LIBGIT2_OPTS += -DWIN32=ON -DMINGW=ON

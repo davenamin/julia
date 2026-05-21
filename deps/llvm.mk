@@ -242,6 +242,10 @@ $(eval $(call LLVM_PATCH,llvm-ittapi-cmake))
 # Exclude iOS (and other Apple embedded platforms) from -Wl,-z,defs in
 # HandleLLVMOptions.cmake; Apple's ld64 does not support the -z flag.
 $(eval $(call LLVM_PROJ_PATCH,llvm-ios-no-z-defs))
+# tools/sancov/sancov.cpp uses {{ClBlacklist}} brace-init, which iPhoneOS
+# 26+ SDK libc++ rejects because std::basic_string gained an explicit
+# template constructor.  Construct the std::string directly instead.
+$(eval $(call LLVM_PROJ_PATCH,llvm-ios-sancov-libcxx-string-init))
 
 ifeq ($(USE_SYSTEM_ZLIB), 0)
 $(LLVM_BUILDDIR_withtype)/build-configured: | $(build_prefix)/manifest/zlib
