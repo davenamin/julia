@@ -178,8 +178,36 @@ install-libs: | $(framework_destdirs)
 		done; \
 	done
 
-# Codesign the framework
+# Codesign the framework.
+#
+# Apple's AMFI (Apple Mobile File Integrity) checks every Mach-O image on
+# dlopen() and refuses to map any binary without its own valid embedded
+# LC_CODE_SIGNATURE.  Signing the framework root alone signs only the
+# framework binary and writes a CodeResources manifest — the bundled
+# dylibs inside (libLLVM, libopenblas, libgmp, sys.dylib, ...) carry no
+# signature of their own and would fail dlopen at runtime on iOS.
+#
+# Sign bottom-up: each leaf dylib first, then the framework binary, then
+# the framework root (so its CodeResources reflects the signed contents).
 codesign:
+	@# 1. Sign every bundled dylib individually.  Skip symlinks so we
+	@#    don't re-sign the same underlying file under multiple names.
+	@for lib in $(IOS_FWDIR)/*.$(SHLIB_EXT); do \
+		[ -f "$$lib" ] && [ ! -L "$$lib" ] || continue; \
+		codesign -s "$(DARWIN_CODESIGN_KEYCHAIN_IDENTITY)" -f \
+			--timestamp=none "$$lib" || exit 1; \
+	done
+	@# 2. Sign the sysimage explicitly (its name doesn't always match the
+	@#    *.$(SHLIB_EXT) glob if the build laid it out differently).
+	@if [ -f $(IOS_FWDIR)/sys.$(SHLIB_EXT) ] && [ ! -L $(IOS_FWDIR)/sys.$(SHLIB_EXT) ]; then \
+		codesign -s "$(DARWIN_CODESIGN_KEYCHAIN_IDENTITY)" -f \
+			--timestamp=none $(IOS_FWDIR)/sys.$(SHLIB_EXT) || exit 1; \
+	fi
+	@# 3. Sign the framework's main binary.
+	codesign -s "$(DARWIN_CODESIGN_KEYCHAIN_IDENTITY)" -f \
+		--timestamp=none $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME)
+	@# 4. Sign the framework root last so CodeResources records hashes
+	@#    of the now-signed contents.
 	codesign -s "$(DARWIN_CODESIGN_KEYCHAIN_IDENTITY)" -f \
 		$(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)
 
@@ -191,6 +219,22 @@ framework: build-julia \
 	@echo ""
 	@echo "iOS framework built successfully ($(IOS_PLATFORM)):"
 	@echo "  $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)"
+	@echo ""
+	@echo "To embed in an Xcode app:"
+	@echo "  1. Drag $(IOS_FRAMEWORK_NAME).framework into the target's 'Frameworks,"
+	@echo "     Libraries, and Embedded Content' list with 'Embed & Sign' selected."
+	@echo "  2. For device / App Store builds (ad-hoc signing only works on the"
+	@echo "     simulator), choose one of:"
+	@echo "       (A) Re-build this framework passing your Apple identity, e.g."
+	@echo "             make IOS=1 ios-framework \\"
+	@echo "               DARWIN_CODESIGN_KEYCHAIN_IDENTITY=\"Apple Development: ...\""
+	@echo "           Then Xcode's Embed phase signs the framework root with the same"
+	@echo "           identity and the internal dylibs already match."
+	@echo "       (B) Add a 'Run Script' build phase after 'Embed Frameworks' that"
+	@echo "           invokes contrib/ios/resign-internal-dylibs.sh.  The script"
+	@echo "           walks the embedded framework, re-signs each internal dylib"
+	@echo "           with the app's identity (\$$EXPANDED_CODE_SIGN_IDENTITY), and"
+	@echo "           re-signs the framework root so CodeResources reflects them."
 	@echo ""
 
 # XCFramework — combines pre-built device and simulator frameworks.
