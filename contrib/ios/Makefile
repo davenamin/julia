@@ -116,58 +116,93 @@ IOS_FWDIR = $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)
 # Copy all shared libraries into the framework and fix up install names so that
 # the framework is fully self-contained.
 #
-# Every .dylib in $(build_shlibdir) is bundled except for test-only libraries
-# and the libjulia loader (which is copied separately as the framework binary).
-# Versioned variants (e.g. libfoo.1.12.dylib) are skipped — only the
-# unversioned name is copied (via -fL to dereference symlinks), and explicit
-# versioned symlinks are created for the libraries that need them.
+# iOS app bundles must not contain symlinks — App Store validation rejects
+# them — so unlike a Unix libdir (unversioned symlink → versioned file) the
+# framework ships real files only.  Each library needs to resolve under up
+# to TWO names, which do not follow a single rule across deps:
+#   - its install-name leaf (what other bundled libs' LC_LOAD_DYLIB
+#     references use; Julia's source-built deps stamp unversioned ids
+#     like @rpath/libgmp.dylib), and
+#   - the upstream SONAME the JLL dlopen constants baked into the
+#     sysimage use (versioned for most deps, e.g. @rpath/libgmp.10.dylib,
+#     but unversioned for e.g. libLLVM).
+# So: first each real file is bundled once under its install-name leaf,
+# then every remaining alias name present in $(build_shlibdir) is
+# materialized as an additional real copy (the symlink fan-out a Unix
+# libdir would use, with copies instead of links).  libLLVM is exempted
+# from the alias pass — nothing references its versioned alias and the
+# copy would double the largest library shipped.
+#
+# The julia libraries themselves get special names:
+#   - libjulia is bundled as the framework binary "$(IOS_FRAMEWORK_NAME)",
+#     and every LC_LOAD_DYLIB reference to a libjulia.*.dylib name is
+#     rewritten to @loader_path/$(IOS_FRAMEWORK_NAME).
+#   - libjulia-internal / libjulia-codegen must be named
+#     <base>.$(JL_MAJOR_SHLIB_EXT) — the loader (the framework binary)
+#     dlopens them via a DEP_LIBS list baked in at compile time
+#     (cli/Makefile), which cannot be rewritten with install_name_tool.
+#     Their LC_ID_DYLIB leaf is the *unversioned* name (src/Makefile), so
+#     the generic id-leaf rule would miss the loader's versioned lookup.
 #
 # Install-name strategy:
 #   - Each library's LC_ID_DYLIB is set to @rpath/Julia.framework/<name>
 #     so that apps can link against the framework with the standard
 #     @executable_path/Frameworks rpath.
 #   - All intra-framework LC_LOAD_DYLIB references are rewritten from
-#     @rpath/<name> to @loader_path/<name> so that libraries within the
-#     framework find each other regardless of the app's rpath setup.
+#     @rpath/<...>/<name> to @loader_path/<name> so that libraries within
+#     the framework find each other regardless of the app's rpath setup.
 install-libs: | $(framework_destdirs)
+	@# --- Start from a clean slate ---
+	@# Remove every binary from a previous run first.  Leftover files under
+	@# names the current layout no longer produces (e.g. after a naming
+	@# scheme change) can otherwise get loaded as a SECOND copy of a
+	@# library at runtime — Julia detects that at init with the cryptic
+	@# "System image file failed consistency check" error.
+	rm -f $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/*.$(SHLIB_EXT)
 	@# --- Copy the main framework binary (libjulia) ---
 	cp -fL $(build_shlibdir)/libjulia.$(JL_MAJOR_MINOR_SHLIB_EXT) $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME)
-	@# --- Copy all other shared libraries ---
+	@# --- Copy all other shared libraries under their canonical names ---
 	@for lib in $(build_shlibdir)/*.$(SHLIB_EXT); do \
-		name=$$(basename $$lib); \
+		[ -f "$$lib" ] && [ ! -L "$$lib" ] || continue; \
+		name=$$(basename "$$lib"); \
 		case $$name in \
-			libjulia.$(SHLIB_EXT)) continue ;; \
+			libjulia.$(SHLIB_EXT)|libjulia.[0-9]*.$(SHLIB_EXT)) continue ;; \
 			libccalltest*|libccalllazy*|libllvmcalltest*) continue ;; \
-			*.[0-9]*.$(SHLIB_EXT)) continue ;; \
 		esac; \
-		cp -fL $$lib $(IOS_FWDIR)/$$name; \
+		case $$name in \
+			libjulia-internal*|libjulia-codegen*) \
+				canonical="$${name%%.*}.$(JL_MAJOR_SHLIB_EXT)" ;; \
+			*) \
+				id=$$(otool -D "$$lib" 2>/dev/null | sed -n '2p'); \
+				if [ -n "$$id" ]; then canonical=$$(basename "$$id"); else canonical=$$name; fi ;; \
+		esac; \
+		cp -f "$$lib" "$(IOS_FWDIR)/$$canonical"; \
+	done
+	@# --- Materialize every alias name as a real copy ---
+	@# The JLL dlopen constants baked into the sysimage reference each
+	@# library by its upstream SONAME (e.g. @rpath/libgmp.10.dylib), which
+	@# for source-built deps is often a DIFFERENT name than the library's
+	@# install-name leaf (Julia's deps stamp unversioned ids like
+	@# @rpath/libgmp.dylib).  Both names exist in $(build_shlibdir) — one
+	@# as the real file, one as a symlink — and both must resolve at
+	@# runtime.  Symlinks are forbidden in iOS bundles, so ship a real
+	@# copy under every name found in the build libdir.  libLLVM is
+	@# exempt: nothing references its versioned alias (libLLVM-*jl) at
+	@# runtime and the copy would double the largest library shipped.
+	@for lib in $(build_shlibdir)/*.$(SHLIB_EXT); do \
+		name=$$(basename "$$lib"); \
+		case $$name in \
+			libjulia.$(SHLIB_EXT)|libjulia.[0-9]*.$(SHLIB_EXT)) continue ;; \
+			libjulia-internal*|libjulia-codegen*|libLLVM*) continue ;; \
+			libccalltest*|libccalllazy*|libllvmcalltest*) continue ;; \
+		esac; \
+		[ -e "$(IOS_FWDIR)/$$name" ] && continue; \
+		cp -fL "$$lib" "$(IOS_FWDIR)/$$name"; \
 	done
 	@# --- Copy the system image (may not exist during cross-compilation) ---
 	@if [ -f $(build_private_shlibdir)/sys.$(SHLIB_EXT) ]; then \
 		cp -fL $(build_private_shlibdir)/sys.$(SHLIB_EXT) $(IOS_FWDIR)/sys.$(SHLIB_EXT); \
 	fi
-	@# --- Versioned symlinks ---
-	@# The framework contains only unversioned dylibs (e.g. libgmp.dylib).
-	@# Julia ccall constants and inter-library SONAMEs reference versioned
-	@# names (e.g. @rpath/libgmp.10.dylib, @rpath/libpcre2-8.0.dylib).
-	@# Create symlinks so that versioned lookups resolve to the unversioned
-	@# copies.
-	@#
-	@# libjulia is special — the framework binary is named "Julia", not
-	@# "libjulia.dylib", so handle it manually.
-	ln -sf $(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/libjulia.$(JL_MAJOR_SHLIB_EXT)
-	ln -sf $(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/libjulia.$(JL_MAJOR_MINOR_SHLIB_EXT)
-	@# Scan the build directory for all versioned dylib names and create
-	@# symlinks pointing to the corresponding unversioned file in the
-	@# framework (e.g. libgmp.10.dylib → libgmp.dylib).
-	@for lib in $(build_shlibdir)/*.[0-9]*.$(SHLIB_EXT); do \
-		[ -e "$$lib" ] || continue; \
-		name=$$(basename "$$lib"); \
-		unversioned=$$(echo "$$name" | sed -E 's/\.[0-9]+(\.[0-9]+)*\.dylib$$/.dylib/'); \
-		if [ -f "$(IOS_FWDIR)/$$unversioned" ] && [ ! -e "$(IOS_FWDIR)/$$name" ]; then \
-			ln -sf "$$unversioned" "$(IOS_FWDIR)/$$name"; \
-		fi; \
-	done
 	@# --- Fix up install names ---
 	install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/$(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME)
 	@for lib in $(IOS_FWDIR)/$(IOS_FRAMEWORK_NAME) $(IOS_FWDIR)/*.$(SHLIB_EXT); do \
@@ -177,7 +212,15 @@ install-libs: | $(framework_destdirs)
 			install_name_tool -id @rpath/$(IOS_FRAMEWORK_DIR)/$$name $$lib 2>/dev/null || true; \
 		fi; \
 		for dep in $$(otool -L $$lib 2>/dev/null | tail -n +2 | grep '@rpath/' | awk '{print $$1}'); do \
-			new=$$(echo $$dep | sed 's|@rpath/|@loader_path/|'); \
+			leaf=$$(basename $$dep); \
+			case $$leaf in \
+				libjulia.$(SHLIB_EXT)|libjulia.[0-9]*.$(SHLIB_EXT)) \
+					new="@loader_path/$(IOS_FRAMEWORK_NAME)" ;; \
+				libjulia-internal*|libjulia-codegen*) \
+					new="@loader_path/$${leaf%%.*}.$(JL_MAJOR_SHLIB_EXT)" ;; \
+				*) \
+					new="@loader_path/$$leaf" ;; \
+			esac; \
 			install_name_tool -change $$dep $$new $$lib 2>/dev/null || true; \
 		done; \
 	done
