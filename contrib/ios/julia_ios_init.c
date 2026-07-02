@@ -191,6 +191,14 @@ int julia_ios_init_with_paths(const char *framework_path,
     return apply_runtime_overrides(resources_path);
 }
 
+void julia_ios_set_interpreter_fallback(void)
+{
+    // jl_options is initialized by libjulia's load-time constructor
+    // (before any app code runs) precisely so embedders can adjust it
+    // between load and jl_init; see cli/loader_lib.c.
+    jl_options.compile_enabled = JL_OPTIONS_COMPILE_MIN;
+}
+
 void julia_ios_atexit(void)
 {
     jl_atexit_hook(0);

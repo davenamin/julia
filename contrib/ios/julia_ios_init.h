@@ -68,6 +68,22 @@ void julia_ios_set_paths(const char *framework_path,
 int julia_ios_init_with_paths(const char *framework_path,
                               const char *resources_path);
 
+// Force interpreter fallback (--compile=min) for code that is not baked
+// into the sysimage.  MUST be called before julia_ios_init_with_paths /
+// jl_init (but after the Julia framework is loaded, which dyld has done
+// by the time any app code runs).
+//
+// Why: iOS forbids third-party apps from allocating executable memory,
+// so Julia's JIT cannot run on a physical device — the first call to a
+// method that was not precompiled into sys.dylib would abort the app.
+// With interpreter fallback, sysimage-baked code still runs at full
+// native speed, and anything else runs (slowly) in the interpreter
+// instead of crashing.  The iOS simulator runs under macOS rules where
+// the JIT works, so calling this is only required for device builds —
+// but interpreting is also the App Store-safe configuration (executing
+// only code shipped in the bundle).
+void julia_ios_set_interpreter_fallback(void);
+
 // Run the standard jl_atexit_hook(0).  Call at app teardown.
 void julia_ios_atexit(void);
 
