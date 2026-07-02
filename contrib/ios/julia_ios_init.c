@@ -77,6 +77,27 @@ void julia_ios_set_paths(const char *framework_path,
     }
 }
 
+// Escape a path for embedding inside a Julia double-quoted string literal:
+// backslash, double-quote, and $ (interpolation) must be backslash-escaped.
+// Returns 0 on success, -1 if the escaped form does not fit in `out`.
+static int escape_julia_string(const char *src, char *out, size_t outsize)
+{
+    size_t j = 0;
+    for (size_t i = 0; src[i] != '\0'; i++) {
+        char c = src[i];
+        if (c == '\\' || c == '"' || c == '$') {
+            if (j + 1 >= outsize)
+                return -1;
+            out[j++] = '\\';
+        }
+        if (j + 1 >= outsize)
+            return -1;
+        out[j++] = c;
+    }
+    out[j] = '\0';
+    return 0;
+}
+
 // Push Sys.STDLIB and LOAD_PATH so they reflect the bundled resources tree
 // rather than whatever JULIA_BINDIR happened to compute.  Must run *after*
 // jl_init has loaded the sysimage (Sys.STDLIB is set during Base init).
@@ -84,6 +105,11 @@ static int apply_runtime_overrides(const char *resources_path)
 {
     if (!resources_path)
         return 0;
+    char res_escaped[1024];
+    if (escape_julia_string(resources_path, res_escaped, sizeof(res_escaped)) != 0) {
+        fprintf(stderr, "julia_ios_init: resources path too long\n");
+        return -1;
+    }
     // Build "$resources/share/julia/stdlib/v$(VERSION.major).$(VERSION.minor)"
     // in Julia rather than via sprintf — VERSION is the only reliable source
     // of the vX.Y suffix once Base has loaded.
@@ -98,7 +124,7 @@ static int apply_runtime_overrides(const char *resources_path)
         "  push!(DEPOT_PATH, res);\n"
         "  nothing\n"
         "end\n",
-        resources_path);
+        res_escaped);
     if (n < 0 || (size_t)n >= sizeof(script)) {
         fprintf(stderr, "julia_ios_init: resources path too long\n");
         return -1;

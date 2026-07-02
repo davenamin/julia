@@ -65,7 +65,9 @@ $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)/Info.plist: | $(framework_destdirs)
 	/usr/libexec/PlistBuddy -x -c "Add :CFBundleName string $(IOS_FRAMEWORK_NAME)" $@
 	/usr/libexec/PlistBuddy -x -c "Add :CFBundleExecutable string $(IOS_FRAMEWORK_NAME)" $@
 	/usr/libexec/PlistBuddy -x -c "Add :CFBundleIdentifier string $(IOS_FRAMEWORK_BUNDLE_ID)" $@
-	/usr/libexec/PlistBuddy -x -c "Add :CFBundleVersion string $(JULIA_COMMIT)" $@
+	@# CFBundleVersion must be a period-separated list of at most three
+	@# non-negative integers — a git SHA here fails App Store validation.
+	/usr/libexec/PlistBuddy -x -c "Add :CFBundleVersion string $(JULIA_MAJOR_VERSION).$(JULIA_MINOR_VERSION).$(JULIA_PATCH_VERSION)" $@
 	/usr/libexec/PlistBuddy -x -c "Add :CFBundleShortVersionString string $(JULIA_MAJOR_VERSION).$(JULIA_MINOR_VERSION).$(JULIA_PATCH_VERSION)" $@
 	/usr/libexec/PlistBuddy -x -c "Add :CFBundleSignature string ????" $@
 	/usr/libexec/PlistBuddy -x -c "Add :CFBundlePackageType string FMWK" $@
@@ -73,6 +75,8 @@ $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)/Info.plist: | $(framework_destdirs)
 	/usr/libexec/PlistBuddy -x -c "Add :MinimumOSVersion string $(IOS_VERSION_MIN)" $@
 	/usr/libexec/PlistBuddy -x -c "Add :CFBundleSupportedPlatforms array" $@
 	/usr/libexec/PlistBuddy -x -c "Add :CFBundleSupportedPlatforms:0 string $(IOS_PLIST_PLATFORM)" $@
+	/usr/libexec/PlistBuddy -x -c "Add :DTPlatformName string $(IOS_PLATFORM)" $@
+	/usr/libexec/PlistBuddy -x -c "Add :DTSDKName string $(IOS_PLATFORM)$(shell xcrun --sdk $(IOS_PLATFORM) --show-sdk-version 2>/dev/null)" $@
 	/usr/libexec/PlistBuddy -x -c "Add :UIDeviceFamily array" $@
 	/usr/libexec/PlistBuddy -x -c "Add :UIDeviceFamily:0 integer 1" $@
 	/usr/libexec/PlistBuddy -x -c "Add :UIDeviceFamily:1 integer 2" $@
@@ -209,7 +213,17 @@ codesign:
 	@# 4. Sign the framework root last so CodeResources records hashes
 	@#    of the now-signed contents.
 	codesign -s "$(DARWIN_CODESIGN_KEYCHAIN_IDENTITY)" -f \
-		$(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)
+		--timestamp=none $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)
+
+# Explicit inter-step dependencies so the framework target is safe under
+# `make -j` (prerequisites of a single target carry no ordering guarantee):
+# libraries must exist before codesign runs, and the built tree must exist
+# before anything is copied out of it.
+install-headers install-libs: build-julia
+codesign: install-libs install-headers \
+	$(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)/Info.plist \
+	$(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_MODULES)/module.modulemap \
+	$(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_HEADERS)/$(IOS_FRAMEWORK_NAME).h
 
 framework: build-julia \
 	$(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)/Info.plist \

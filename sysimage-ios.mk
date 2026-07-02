@@ -57,6 +57,12 @@ endif
 # top-level iOS gate which is itself evaluated even on non-IOS makes).
 IOS_LINKER = $(shell xcrun --sdk $(IOS_PLATFORM) -f clang 2>/dev/null)
 
+# Framework name for the sysimage install_name.  IOS_FRAMEWORK_NAME is the
+# variable contrib/ios and build-xcframework.sh pass around; FRAMEWORK_NAME
+# is Make.inc's macOS framework variable (default "Julia"), kept as the
+# fallback so a bare `make -f sysimage-ios.mk` still produces a sane id.
+IOS_FRAMEWORK_NAME ?= $(FRAMEWORK_NAME)
+
 # Optional: extra Julia code baked into the iOS sysimage at stage 3.  Set
 # IOS_SYSIMAGE_EXTRA_JL=/abs/path/to/extras.jl (or a space-separated list of
 # paths) and each file is loaded via the host julia's -L flag before
@@ -190,4 +196,4 @@ $(build_private_libdir)/%.$(SHLIB_EXT): $(build_private_libdir)/%-o.a
 		$(WHOLE_ARCHIVE) $< $(NO_WHOLE_ARCHIVE) \
 		$(if $(findstring -debug,$(notdir $@)),-ljulia-internal-debug -ljulia-debug,-ljulia-internal -ljulia) \
 		-o $@)
-	@install_name_tool -id @rpath/$(FRAMEWORK_NAME).framework/$(notdir $@) $@
+	@install_name_tool -id @rpath/$(IOS_FRAMEWORK_NAME).framework/$(notdir $@) $@

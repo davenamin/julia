@@ -57,6 +57,14 @@ void julia_ios_set_paths(const char *framework_path,
 // Combines julia_ios_set_paths + jl_init_with_image + post-init
 // overrides into one call.  Returns 0 on success, -1 on failure
 // (framework_path or resources_path missing or not a directory).
+//
+// THREADING: the thread this runs on becomes Julia's main thread — all
+// later jl_eval_string / jl_call* invocations must happen on that same
+// thread (or via Julia-side threading primitives).  Initializing on a
+// dispatch queue and then calling into Julia from the UI thread is
+// undefined behavior.  Initialize on whichever single thread will own
+// all Julia interaction (a dedicated worker thread is the usual choice,
+// so a long-running Julia call can never freeze the UI).
 int julia_ios_init_with_paths(const char *framework_path,
                               const char *resources_path);
 
