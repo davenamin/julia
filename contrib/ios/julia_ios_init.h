@@ -29,34 +29,35 @@
 extern "C" {
 #endif
 
-// Set JULIA_BINDIR-equivalent env vars so Julia's runtime path lookups
-// resolve into the framework + resources tree.  Safe to call before
-// jl_init().  No-op if either argument is NULL.
+// Set the Julia path env vars so all of Julia's path-relative lookups
+// resolve into the shipped resources tree.  Safe to call before jl_init();
+// no-op if resources_path is NULL.
 //
-//   framework_path: absolute path to the embedded Julia.framework directory
-//                   (the dir containing libjulia.dylib, sys.dylib, ...).
 //   resources_path: absolute path to the julia-runtime-resources directory
 //                   shipped in the app bundle.
-void julia_ios_set_paths(const char *framework_path,
-                         const char *resources_path);
+//
+// Sets JULIA_BINDIR=<resources>/bin (so Sys.STDLIB, the CA cert path, and
+// Pkg's stdlib directory — all computed as BINDIR/../share/julia/... —
+// land in the shipped tree), plus JULIA_DEPOT_PATH / JULIA_PROJECT /
+// JULIA_LOAD_PATH.  Note BINDIR does NOT point at the framework: sys.dylib
+// and the dependency dylibs load via dyld @rpath, not relative to BINDIR.
+void julia_ios_set_paths(const char *resources_path);
 
 // NOTE: the framework_path argument is validated but used only as a
-// fallback — sys.dylib is opened from the framework directory dyld
-// actually loaded libjulia from (found via dladdr), which may differ
-// from the embedded copy (e.g. simulator Debug builds resolve the
-// app's framework link against DerivedData/Build/Products).  Mixing
-// the two loads a second set of Julia dylibs and fails jl_init's
-// sysimage consistency check.
+// fallback for locating sys.dylib — sys.dylib is opened from the framework
+// directory dyld actually loaded libjulia from (found via dladdr), which
+// may differ from the embedded copy (e.g. simulator Debug builds resolve
+// the app's framework link against DerivedData/Build/Products).  Mixing
+// the two loads a second set of Julia dylibs and fails jl_init's sysimage
+// consistency check.
 //
-// Call jl_init_with_image() using the framework's sys.dylib, then run
-// `Sys.STDLIB = ...; empty!(LOAD_PATH); push!(LOAD_PATH, "@", "@stdlib")`
-// so stdlib + the bundled Project resolve against the resources tree
-// rather than wherever JULIA_BINDIR ended up pointing (which on iOS is
-// the app's main bundle, not the framework).
-//
-// Combines julia_ios_set_paths + jl_init_with_image + post-init
-// overrides into one call.  Returns 0 on success, -1 on failure
-// (framework_path or resources_path missing or not a directory).
+// Combines julia_ios_set_paths + jl_init_with_image into one call: it
+// points JULIA_BINDIR at <resources>/bin, opens the framework's sys.dylib,
+// and calls jl_init_with_image.  No post-init patching is needed — Base
+// computes Sys.STDLIB (and Pkg its stdlib dir) from BINDIR, which now
+// resolves into the resources tree.  Returns 0 on success, -1 on failure
+// (framework_path or resources_path missing/not a directory, or an
+// exception during jl_init).
 //
 // THREADING: the thread this runs on becomes Julia's main thread — all
 // later jl_eval_string / jl_call* invocations must happen on that same

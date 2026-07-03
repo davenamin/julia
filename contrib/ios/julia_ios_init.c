@@ -43,100 +43,38 @@ static int loaded_framework_dir(char *out, size_t outsize)
     return 0;
 }
 
-void julia_ios_set_paths(const char *framework_path,
-                         const char *resources_path)
-{
-    if (framework_path) {
-        // JULIA_BINDIR is where Julia looks for ../share/julia/stdlib, sys.dylib,
-        // etc.  On iOS we point it at the framework dir; the resources path
-        // override below then redirects stdlib lookups.
-        setenv("JULIA_BINDIR", framework_path, 1);
-    }
-    if (resources_path) {
-        // Depot = where Pkg looks for packages/<Name>/<HASH7>/ and
-        // artifacts/<sha>/.  Trailing ':' would make Julia also search the
-        // default user depot (~/.julia), which doesn't exist on iOS — keep
-        // it bounded to the bundled tree.
-        setenv("JULIA_DEPOT_PATH", resources_path, 1);
-        // LOAD_PATH = `@` (active project) + `@stdlib`.  The active project
-        // comes from JULIA_PROJECT below.
-        setenv("JULIA_LOAD_PATH", "@:@stdlib", 1);
-        setenv("JULIA_PROJECT", resources_path, 1);
-        // CA roots for NetworkOptions / Downloads / LibGit2.  Their default
-        // fallback is JULIA_BINDIR/../share/julia/cert.pem, which resolves
-        // next to the framework where nothing is installed; point them at
-        // the copy bundled in the resources tree instead.
-        char certs[2048];
-        int n = snprintf(certs, sizeof(certs), "%s/share/julia/cert.pem",
-                         resources_path);
-        struct stat st;
-        if (n > 0 && (size_t)n < sizeof(certs) &&
-            stat(certs, &st) == 0 && S_ISREG(st.st_mode)) {
-            setenv("JULIA_SSL_CA_ROOTS_PATH", certs, 1);
-        }
-    }
-}
-
-// Escape a path for embedding inside a Julia double-quoted string literal:
-// backslash, double-quote, and $ (interpolation) must be backslash-escaped.
-// Returns 0 on success, -1 if the escaped form does not fit in `out`.
-static int escape_julia_string(const char *src, char *out, size_t outsize)
-{
-    size_t j = 0;
-    for (size_t i = 0; src[i] != '\0'; i++) {
-        char c = src[i];
-        if (c == '\\' || c == '"' || c == '$') {
-            if (j + 1 >= outsize)
-                return -1;
-            out[j++] = '\\';
-        }
-        if (j + 1 >= outsize)
-            return -1;
-        out[j++] = c;
-    }
-    out[j] = '\0';
-    return 0;
-}
-
-// Push Sys.STDLIB and LOAD_PATH so they reflect the bundled resources tree
-// rather than whatever JULIA_BINDIR happened to compute.  Must run *after*
-// jl_init has loaded the sysimage (Sys.STDLIB is set during Base init).
-static int apply_runtime_overrides(const char *resources_path)
+void julia_ios_set_paths(const char *resources_path)
 {
     if (!resources_path)
-        return 0;
-    char res_escaped[1024];
-    if (escape_julia_string(resources_path, res_escaped, sizeof(res_escaped)) != 0) {
-        fprintf(stderr, "julia_ios_init: resources path too long\n");
-        return -1;
-    }
-    // Build "$resources/share/julia/stdlib/v$(VERSION.major).$(VERSION.minor)"
-    // in Julia rather than via sprintf — VERSION is the only reliable source
-    // of the vX.Y suffix once Base has loaded.
-    char script[2048];
-    int n = snprintf(script, sizeof(script),
-        "let res = \"%s\";\n"
-        "  ver = string(\"v\", VERSION.major, '.', VERSION.minor);\n"
-        "  Sys.STDLIB = joinpath(res, \"share\", \"julia\", \"stdlib\", ver);\n"
-        "  empty!(LOAD_PATH);\n"
-        "  push!(LOAD_PATH, \"@\", \"@stdlib\");\n"
-        "  empty!(DEPOT_PATH);\n"
-        "  push!(DEPOT_PATH, res);\n"
-        "  nothing\n"
-        "end\n",
-        res_escaped);
-    if (n < 0 || (size_t)n >= sizeof(script)) {
-        fprintf(stderr, "julia_ios_init: resources path too long\n");
-        return -1;
-    }
-    jl_value_t *result = jl_eval_string(script);
-    if (jl_exception_occurred()) {
-        fprintf(stderr, "julia_ios_init: override eval failed: %s\n",
-                jl_typeof_str(jl_exception_occurred()));
-        return -1;
-    }
-    (void)result;
-    return 0;
+        return;
+
+    // JULIA_BINDIR is the anchor Julia resolves everything path-relative
+    // from: Base computes Sys.STDLIB as BINDIR/../share/julia/stdlib/vX.Y
+    // (base/sysinfo.jl), MozillaCACerts_jll computes cert.pem as
+    // BINDIR/../share/julia/cert.pem, and Pkg derives its stdlib directory
+    // the same way.  We ship all of those under <resources>/share/julia/,
+    // so pointing BINDIR at <resources>/bin makes every one of those
+    // lookups resolve correctly with no post-init patching.  The bin/
+    // directory itself need not contain anything (there is no julia
+    // executable on iOS); build-xcframework.sh creates it so BINDIR names
+    // a real path.  sys.dylib and the internal/JLL dylibs are NOT found via
+    // BINDIR — they load through dyld @rpath / dladdr — so BINDIR pointing
+    // away from the framework is safe.
+    char bindir[2048];
+    int n = snprintf(bindir, sizeof(bindir), "%s/bin", resources_path);
+    if (n > 0 && (size_t)n < sizeof(bindir))
+        setenv("JULIA_BINDIR", bindir, 1);
+
+    // Depot = where Pkg looks for packages/<Name>/<HASH7>/ and
+    // artifacts/<sha>/.  These live at the resources root, not under
+    // share/julia, so this must be set explicitly (the BINDIR-relative
+    // depot default would point at <resources>/share/julia).  No trailing
+    // ':' — that would also search ~/.julia, which doesn't exist on iOS.
+    setenv("JULIA_DEPOT_PATH", resources_path, 1);
+    // LOAD_PATH = `@` (active project) + `@stdlib`.  `@stdlib` expands to
+    // Sys.STDLIB, which is now correct by virtue of JULIA_BINDIR above.
+    setenv("JULIA_LOAD_PATH", "@:@stdlib", 1);
+    setenv("JULIA_PROJECT", resources_path, 1);
 }
 
 int julia_ios_init_with_paths(const char *framework_path,
@@ -153,9 +91,11 @@ int julia_ios_init_with_paths(const char *framework_path,
         return -1;
     }
 
-    // Prefer the framework directory dyld actually loaded libjulia from
-    // over the caller-supplied path; see loaded_framework_dir().  The
-    // caller's path is only the fallback if dladdr somehow fails.
+    // Locate sys.dylib in the framework directory dyld actually loaded
+    // libjulia from (see loaded_framework_dir()); the caller-supplied
+    // framework_path is only the fallback if dladdr fails.  This is a
+    // separate concern from JULIA_BINDIR: sys.dylib must come from the
+    // framework, but BINDIR points at the resources tree.
     char fw_dir[2048];
     if (loaded_framework_dir(fw_dir, sizeof(fw_dir)) != 0) {
         int m = snprintf(fw_dir, sizeof(fw_dir), "%s", framework_path);
@@ -175,10 +115,24 @@ int julia_ios_init_with_paths(const char *framework_path,
                 fw_dir, framework_path);
     }
 
-    julia_ios_set_paths(fw_dir, resources_path);
+    // Set JULIA_BINDIR / depot / project / load-path from the resources
+    // tree.  Must happen before jl_init: Base reads these env vars and
+    // computes Sys.STDLIB during sysimage load.
+    julia_ios_set_paths(resources_path);
 
-    // sys.dylib lives next to libjulia.dylib inside the framework.  Pass
-    // the absolute path so jl_init_with_image doesn't have to guess.
+    // Point the bindir argument at the same <resources>/bin.  jl_init_with_image
+    // assigns it straight into jl_options.julia_bindir (src/jlapi.c), and it
+    // takes precedence over the JULIA_BINDIR env var, so pass it explicitly
+    // to be unambiguous.
+    char bindir[2048];
+    int b = snprintf(bindir, sizeof(bindir), "%s/bin", resources_path);
+    if (b < 0 || (size_t)b >= sizeof(bindir)) {
+        fprintf(stderr, "julia_ios_init: resources path too long\n");
+        return -1;
+    }
+
+    // sys.dylib lives next to libjulia inside the framework.  Pass the
+    // absolute path so jl_init_with_image doesn't derive it from bindir.
     char image[2048];
     int n = snprintf(image, sizeof(image), "%s/sys.dylib", fw_dir);
     if (n < 0 || (size_t)n >= sizeof(image)) {
@@ -186,9 +140,8 @@ int julia_ios_init_with_paths(const char *framework_path,
         return -1;
     }
 
-    jl_init_with_image(fw_dir, image);
-
-    return apply_runtime_overrides(resources_path);
+    jl_init_with_image(bindir, image);
+    return jl_exception_occurred() ? -1 : 0;
 }
 
 void julia_ios_set_interpreter_fallback(void)

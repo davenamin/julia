@@ -142,9 +142,17 @@ package_runtime_resources() {
     rm -rf "$out"
     mkdir -p "$out/share/julia/stdlib"
 
+    # Empty bin/ so JULIA_BINDIR=<resources>/bin names a real directory.
+    # julia_ios_init.c points JULIA_BINDIR here so Base's Sys.STDLIB, the
+    # CA cert path, and Pkg's stdlib dir — all computed as
+    # BINDIR/../share/julia/... — resolve into this tree.  Nothing needs to
+    # live in bin/ (there is no julia executable on iOS); it only has to
+    # exist so `<resources>/bin/../share` normalizes to `<resources>/share`.
+    mkdir -p "$out/bin"
+
     # Stdlib trees (Project.toml + Manifest.toml + per-stdlib sources).
     # Julia looks for these under JULIA_BINDIR/../share/julia/stdlib/vX.Y/
-    # by default; bundle them so the app can point at them explicitly.
+    # (= <resources>/share/julia/stdlib/vX.Y here); bundle them there.
     # -L dereferences symlinks: the build tree's per-stdlib entries are
     # relative symlinks back into $JULIA_SRC/stdlib/, which dangle once the
     # tree is copied into an app bundle (and iOS bundles reject symlinks
@@ -157,10 +165,10 @@ package_runtime_resources() {
         exit 1
     fi
 
-    # CA root certificates.  NetworkOptions (and through it Downloads /
-    # LibGit2) falls back to JULIA_BINDIR/../share/julia/cert.pem, which on
-    # iOS resolves next to the framework where nothing is installed —
-    # julia_ios_init.c points JULIA_SSL_CA_ROOTS_PATH at this copy instead.
+    # CA root certificates.  MozillaCACerts_jll computes the cert path as
+    # JULIA_BINDIR/../share/julia/cert.pem; with JULIA_BINDIR=<resources>/bin
+    # that resolves to this copy, so NetworkOptions / Downloads / LibGit2
+    # find it with no extra env override.
     if [[ -f "$JULIA_SRC/usr/share/julia/cert.pem" ]]; then
         cp -L "$JULIA_SRC/usr/share/julia/cert.pem" "$out/share/julia/cert.pem"
     else
