@@ -114,6 +114,18 @@ HOST_JULIA_ENV := JULIA_BINDIR=$(JULIAHOME)/usr/bin \
                  JULIA_NUM_THREADS=1
 endif
 
+# When extra code/packages are baked in, prepend a preamble that initializes
+# the loading environment.  Stage 3 runs in `--output-o` mode, which skips
+# Base.__init__, leaving Sys.STDLIB / LOAD_PATH / DEPOT_PATH / active project
+# unset — so a `using SomePkg` in an EXTRA_JL file would fail to resolve.  The
+# preamble re-runs those init steps (honoring HOST_JULIA_ENV) before the
+# warm-up files load.  Empty for a plain bake with no extras.
+ifneq ($(IOS_SYSIMAGE_EXTRA_JL)$(IOS_SYSIMAGE_EXTRA_PROJECT),)
+IOS_SYSIMAGE_PRELOAD := -L $(JULIAHOME)/contrib/ios/sysimage_env_init.jl
+else
+IOS_SYSIMAGE_PRELOAD :=
+endif
+
 COMPILER_SRCS := $(addprefix $(JULIAHOME)/, \
 		base/boot.jl base/docs/core.jl base/abstractarray.jl base/abstractdict.jl \
 		base/array.jl base/bitarray.jl base/bitset.jl base/bool.jl base/ctypes.jl \
@@ -172,7 +184,7 @@ $(build_private_libdir)/sys.ji: $(build_private_libdir)/corecompiler.ji $(JULIAH
 # refuses to dlopen it.  Emitting only the .ji cache sidesteps that; the
 # package's methods are still compiled into sys.dylib here via --compile=all.
 define sysimg_ios_builder
-$$(build_private_libdir)/sys$1-o.a : $$(build_private_libdir)/sys.ji $$(JULIAHOME)/contrib/generate_precompile.jl
+$$(build_private_libdir)/sys$1-o.a : $$(build_private_libdir)/sys.ji $$(JULIAHOME)/contrib/generate_precompile.jl $$(JULIAHOME)/contrib/ios/sysimage_env_init.jl
 	@$$(call PRINT_JULIA, cd $$(JULIAHOME)/base && \
 	if ! $(HOST_JULIA_ENV) $(HOST_JULIA) $2 -C apple-m1 $$(HEAPLIM) \
 			--compile=all \
@@ -181,6 +193,7 @@ $$(build_private_libdir)/sys$1-o.a : $$(build_private_libdir)/sys.ji $$(JULIAHOM
 			--output-o $$@.tmp $$(JULIA_SYSIMG_BUILD_FLAGS) \
 			--startup-file=no --warn-overwrite=yes \
 			--sysimage $$< \
+			$(IOS_SYSIMAGE_PRELOAD) \
 			$(foreach extra,$(IOS_SYSIMAGE_EXTRA_JL),-L $(extra)) \
 			$$(JULIAHOME)/contrib/generate_precompile.jl $(JULIA_PRECOMPILE); then \
 		echo '*** iOS sysimage stage 3 (sys$1-o.a) failed.  Try `make cleanall`. ***'; \
