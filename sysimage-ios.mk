@@ -75,10 +75,20 @@ IOS_SYSIMAGE_EXTRA_JL ?=
 # Optional: extra Julia project whose packages should be baked into the iOS
 # sysimage.  Set IOS_SYSIMAGE_EXTRA_PROJECT=/abs/path/to/project-dir, where
 # the directory contains Project.toml + Manifest.toml.  Run
-# `julia --project=<dir> -e 'using Pkg; Pkg.instantiate()'` first so the
-# host's depot has the package sources downloaded.  Combined with
-# IOS_SYSIMAGE_EXTRA_JL containing `using SomePackage` lines, the listed
+# `julia --pkgimages=no --project=<dir> -e 'using Pkg; Pkg.instantiate()'`
+# first so the host's depot has the package sources downloaded.  Combined
+# with IOS_SYSIMAGE_EXTRA_JL containing `using SomePackage` lines, the listed
 # packages get baked into sys.dylib.
+#
+# NOTE on --pkgimages=no: Julia's bundled LLD 15 (LLVM julia-15.0.7-10) does
+# not set the SG_READ_ONLY flag on the __DATA_CONST segment of the pkgimage
+# .dylib it links.  Recent macOS/dyld rejects such dylibs at dlopen
+# ("__DATA_CONST segment missing SG_READ_ONLY flag"), so generating native
+# pkgimages on the host fails.  --pkgimages=no makes precompilation emit only
+# the .ji serialized cache (no .dylib to dlopen), which is all the bake needs:
+# stage 3 loads the package to compile its methods into sys.dylib via
+# --compile=all, so host-side native pkgimages are irrelevant to the result.
+# This is an upstream Julia 1.10 + new-macOS limitation, not iOS-specific.
 #
 # NOTE: only pure-Julia packages bake cleanly.  Packages that load JLLs
 # (Foo_jll) require the corresponding lib<foo>.dylib to be shipped in the
@@ -156,11 +166,17 @@ $(build_private_libdir)/sys.ji: $(build_private_libdir)/corecompiler.ji $(JULIAH
 	@mv $@.tmp $@
 
 # Stage 3: sys$1-o.a — iOS arm64 object archive, cross-emitted via --target.
+# --pkgimages=no: when IOS_SYSIMAGE_EXTRA_JL does `using SomePkg`, the host
+# must LOAD that package without generating a native pkgimage .dylib — its
+# bundled LLD 15 omits SG_READ_ONLY on __DATA_CONST and recent macOS/dyld then
+# refuses to dlopen it.  Emitting only the .ji cache sidesteps that; the
+# package's methods are still compiled into sys.dylib here via --compile=all.
 define sysimg_ios_builder
 $$(build_private_libdir)/sys$1-o.a : $$(build_private_libdir)/sys.ji $$(JULIAHOME)/contrib/generate_precompile.jl
 	@$$(call PRINT_JULIA, cd $$(JULIAHOME)/base && \
 	if ! $(HOST_JULIA_ENV) $(HOST_JULIA) $2 -C apple-m1 $$(HEAPLIM) \
 			--compile=all \
+			--pkgimages=no \
 			--target=$(IOS_TRIPLE) \
 			--output-o $$@.tmp $$(JULIA_SYSIMG_BUILD_FLAGS) \
 			--startup-file=no --warn-overwrite=yes \
