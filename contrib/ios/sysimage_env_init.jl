@@ -23,32 +23,40 @@ Base.init_depot_path()       # DEPOT_PATH (JULIA_DEPOT_PATH or default depot)
 Base.init_load_path()        # LOAD_PATH (JULIA_LOAD_PATH, e.g. @:@stdlib)
 Base.init_active_project()   # active project (JULIA_PROJECT)
 
-# `--output-o` mode also skips the runtime pass that runs each sysimage
-# module's `__init__` (the C runtime does this during a normal `jl_init`,
-# right after restoring the image).  So stdlib modules baked into the base
-# sysimage are present but their runtime state is never initialized.  The one
-# that bites in practice is LinearAlgebra: its `__init__` forwards the BLAS /
-# LAPACK symbols into libblastrampoline (`BLAS.lbt_forward`), and without it
-# every BLAS/LAPACK call dispatches through an unbound trampoline entry and
+# `--output-o` (non-incremental) mode also skips running each restored
+# sysimage module's `__init__`.  The C runtime *defers* it: in this mode
+# `jl_init_restored_module` doesn't run the initializer, it only queues the
+# module into `jl_module_init_order` so the *output* image runs it at its own
+# startup (see src/module.c).  So stdlib modules baked into the base sysimage
+# are present but their runtime state is never initialized during the bake.
+# The one that bites in practice is LinearAlgebra: its `__init__` forwards the
+# BLAS/LAPACK symbols into libblastrampoline (`BLAS.lbt_forward`), and without
+# it every BLAS/LAPACK call dispatches through an unbound trampoline entry and
 # segfaults (`unknown function (ip: 0x0)`).  A baked package that touches BLAS
-# at load time — e.g. Colors evaluates `inv(...)` for a constant matrix at
-# top level — crashes the bake before `using` even returns.
+# at load time — e.g. Colors evaluates `inv(...)` for a constant matrix at top
+# level — crashes the bake before `using` even returns.  (PackageCompiler
+# avoids this only because it builds *incremental* images, where the same C
+# path runs the initializers instead of deferring them.)
 #
-# Re-run the initializers for the already-restored sysimage modules, in load
-# order, exactly as the runtime would.  Modules loaded *fresh* by an EXTRA_JL
-# `using` self-initialize via the loader, so this only needs to cover the ones
-# already in the image.  Skip Core and Base: Core has no `__init__`, and we
-# deliberately do not run `Base.__init__` in full here (it starts background
-# threads / signal handlers inappropriate for a build process) — its loading
-# pieces were already replicated above.
+# Invoke the restored modules' `__init__`s directly here, bypassing the
+# deferring `jl_init_restored_module` — calling the Julia function runs it now
+# in the bake process, which is what the precompile workload needs.  The
+# deferred queue is untouched, so the output image still re-runs these at its
+# own startup (on device, that's where the real BLAS/paths get set up).
+# Only the modules already in the base image need this: they're the ones live
+# at preamble time, and one of them (LinearAlgebra) must have forwarded BLAS
+# before the workload's `using` evaluates a package body that calls into it at
+# top level (Colors' `inv`).  Skip Core (no `__init__`) and Base (we
+# deliberately don't run `Base.__init__` in full here
+# — it starts background threads / signal handlers inappropriate for a build
+# process; its loading pieces were already replicated above).
 for mod in Base.loaded_modules_array()
     (mod === Core || mod === Base) && continue
-    if isdefined(mod, :__init__)
-        try
-            Base.run_module_init(mod)
-        catch ex
-            Base.showerror_nostdio(ex, "WARNING: Error initializing $(nameof(mod)) in sysimage bake")
-        end
+    isdefined(mod, :__init__) || continue
+    try
+        Base.invokelatest(getglobal(mod, :__init__))
+    catch ex
+        Base.showerror_nostdio(ex, "WARNING: Error initializing $(nameof(mod)) in sysimage bake")
     end
 end
 nothing
