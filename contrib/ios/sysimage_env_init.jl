@@ -42,21 +42,76 @@ Base.init_active_project()   # active project (JULIA_PROJECT)
 # deferring `jl_init_restored_module` — calling the Julia function runs it now
 # in the bake process, which is what the precompile workload needs.  The
 # deferred queue is untouched, so the output image still re-runs these at its
-# own startup (on device, that's where the real BLAS/paths get set up).
-# Only the modules already in the base image need this: they're the ones live
-# at preamble time, and one of them (LinearAlgebra) must have forwarded BLAS
-# before the workload's `using` evaluates a package body that calls into it at
-# top level (Colors' `inv`).  Skip Core (no `__init__`) and Base (we
-# deliberately don't run `Base.__init__` in full here
-# — it starts background threads / signal handlers inappropriate for a build
-# process; its loading pieces were already replicated above).
-for mod in Base.loaded_modules_array()
-    (mod === Core || mod === Base) && continue
-    isdefined(mod, :__init__) || continue
-    try
-        Base.invokelatest(getglobal(mod, :__init__))
-    catch ex
-        Base.showerror_nostdio(ex, "WARNING: Error initializing $(nameof(mod)) in sysimage bake")
+# own startup (on device, that's where the real BLAS/paths get set up).  Skip
+# Core (no `__init__`) and Base (we deliberately don't run `Base.__init__` in
+# full here — it starts background threads / signal handlers inappropriate for
+# a build process; its loading pieces were already replicated above).
+let loaded = Base.loaded_modules_array(),
+    byname = Dict{Symbol,Module}(nameof(m) => m for m in loaded)
+
+    # Run one restored module's initializer now, in this process.
+    run_init = function (m)
+        (m === nothing || m === Core || m === Base) && return
+        isdefined(m, :__init__) || return
+        try
+            Base.invokelatest(getglobal(m, :__init__))
+        catch ex
+            Base.showerror_nostdio(ex, "WARNING: Error initializing $(nameof(m)) in sysimage bake")
+        end
+        return
+    end
+
+    # BLAS is the case that actually bites the bake, and it needs care.  A baked
+    # package that calls BLAS at load time (Colors evaluates a top-level `inv`)
+    # needs the host BLAS/LAPACK symbols forwarded into libblastrampoline first
+    # — that is LinearAlgebra.__init__'s job (`BLAS.lbt_forward(...)`), but only
+    # *after* OpenBLAS_jll.__init__ has set `libopenblas_path`.  Two things make
+    # a plain restore-order loop unreliable for this:
+    #   * restore order isn't guaranteed to run OpenBLAS_jll before
+    #     LinearAlgebra, and
+    #   * OpenBLAS_jll.__init__ opens `@rpath/libopenblas*.dylib`, which may not
+    #     resolve in the bake process; if that throws, `libopenblas_path` is left
+    #     "" and `lbt_forward(""; clear=true)` clears the trampoline to a stub
+    #     that aborts the process with "Quitting." on the first BLAS call.
+    # So drive the chain explicitly and in order, and if the JLL's @rpath open
+    # didn't set a path, fall back to the host's bundled OpenBLAS by abs path.
+    ob = get(byname, :OpenBLAS_jll, nothing)
+    if ob !== nothing
+        run_init(ob)
+        if isempty(getglobal(ob, :libopenblas_path))
+            for nm in ("libopenblas64_", "libopenblas")
+                p = joinpath(Sys.BINDIR, Base.LIBDIR, "julia",
+                             string(nm, ".", Base.Libc.Libdl.dlext))
+                isfile(p) || continue
+                try
+                    h = Base.Libc.Libdl.dlopen(p)
+                    setglobal!(ob, :libopenblas_handle, h)
+                    setglobal!(ob, :libopenblas_path, Base.Libc.Libdl.dlpath(h))
+                    break
+                catch ex
+                    Base.showerror_nostdio(ex, "WARNING: could not dlopen host OpenBLAS at $p")
+                end
+            end
+        end
+        # Report which OpenBLAS the bake forwards (nostdio-safe raw write, since
+        # `Base.__init__`/`reinit_stdio` has not run in this mode).
+        msg = string("iOS sysimage bake: forwarding BLAS from '",
+                     getglobal(ob, :libopenblas_path), "'\n")
+        ccall(:write, Cssize_t, (Cint, Ptr{UInt8}, Csize_t), 2, msg, sizeof(msg))
+    end
+    run_init(get(byname, :libblastrampoline_jll, nothing))
+    run_init(get(byname, :LinearAlgebra, nothing))
+
+    # Best effort: run the remaining restored modules' initializers too, so
+    # other baked packages that rely on stdlib init at load time behave.  The
+    # BLAS chain above is skipped here so it isn't re-run (and re-cleared) out
+    # of order.
+    blas_chain = (ob,
+                  get(byname, :libblastrampoline_jll, nothing),
+                  get(byname, :LinearAlgebra, nothing))
+    for mod in loaded
+        any(x -> x === mod, blas_chain) && continue
+        run_init(mod)
     end
 end
 nothing
