@@ -14,10 +14,17 @@
 #
 # Re-run the loading-init steps `Base.__init__` performs, honoring the JULIA_*
 # environment the bake already sets, so the extra project's packages resolve
-# and load; then re-run the sysimage modules' own `__init__`s (which the same
-# `--output-o` mode also skips) so stdlib runtime state — notably LinearAlgebra's
-# BLAS/LAPACK forwarding — is live before any warm-up file loads.  These are
-# no-ops for a bake with no extra packages (the preamble isn't loaded then).
+# and load; also re-run the stdio setup (without it, `stdout`/`stderr`/`stdin`
+# are still the raw `Core.CoreSTDOUT`/… handles, so a package that redirects
+# stdio at load/precompile time — e.g. Test's `precompile.jl` does
+# `redirect_stdout(devnull) do … end` — fails restoring with
+# `MethodError: (::RedirectStdStream)(::Core.CoreSTDOUT)`).  Then re-run the
+# sysimage modules' own `__init__`s (which the same `--output-o` mode also
+# skips) so stdlib runtime state — notably LinearAlgebra's BLAS/LAPACK
+# forwarding — is live before any warm-up file loads.  These are no-ops for a
+# bake with no extra packages (the preamble isn't loaded then).
+Base.reinit_stdio()               # stdout/stderr/stdin as real libuv streams
+Base.Multimedia.reinit_displays() # display stack (falls back to stdout)
 Base.Sys.__init_build()      # Sys.BINDIR + Sys.STDLIB (from JULIA_BINDIR)
 Base.init_depot_path()       # DEPOT_PATH (JULIA_DEPOT_PATH or default depot)
 Base.init_load_path()        # LOAD_PATH (JULIA_LOAD_PATH, e.g. @:@stdlib)
