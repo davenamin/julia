@@ -14,17 +14,28 @@
 #
 # Re-run the loading-init steps `Base.__init__` performs, honoring the JULIA_*
 # environment the bake already sets, so the extra project's packages resolve
-# and load; also re-run the stdio setup (without it, `stdout`/`stderr`/`stdin`
-# are still the raw `Core.CoreSTDOUT`/… handles, so a package that redirects
-# stdio at load/precompile time — e.g. Test's `precompile.jl` does
-# `redirect_stdout(devnull) do … end` — fails restoring with
-# `MethodError: (::RedirectStdStream)(::Core.CoreSTDOUT)`).  Then re-run the
-# sysimage modules' own `__init__`s (which the same `--output-o` mode also
-# skips) so stdlib runtime state — notably LinearAlgebra's BLAS/LAPACK
-# forwarding — is live before any warm-up file loads.  These are no-ops for a
-# bake with no extra packages (the preamble isn't loaded then).
-Base.reinit_stdio()               # stdout/stderr/stdin as real libuv streams
-Base.Multimedia.reinit_displays() # display stack (falls back to stdout)
+# and load; then re-run the sysimage modules' own `__init__`s (which the same
+# `--output-o` mode also skips) so stdlib runtime state — notably LinearAlgebra's
+# BLAS/LAPACK forwarding — is live before any warm-up file loads.  These are
+# no-ops for a bake with no extra packages (the preamble isn't loaded then).
+#
+# Point the stdio globals at `devnull`.  In `--output-o` mode `Base.__init__`
+# never ran, so `stdout`/`stderr`/`stdin` are still the raw `Core.CoreSTDOUT`/…
+# handles.  A package that redirects stdio at load/precompile time — Test's
+# `precompile.jl` does `redirect_stdout(devnull) do … end` — then fails to
+# *restore* the saved handle with
+# `MethodError: (::RedirectStdStream)(::Core.CoreSTDOUT)`.
+# NB do NOT use `Base.reinit_stdio()` here: it installs live libuv stream
+# objects (with embedded OS handle pointers), and this process serializes its
+# globals into the output image — baking a live handle corrupts the image
+# (`jl_read_memreflist` abort / `uv_close` assertion on restore).  `devnull` is
+# a handleless singleton that is both redirectable (so save/restore works) and
+# safe to serialize; the device re-inits real stdio via `Base.__init__` anyway.
+# Bake diagnostics/errors still appear: they go through the C-level stderr, not
+# these Julia globals.
+for _s in (:stdin, :stdout, :stderr)
+    setglobal!(Base, _s, Base.devnull)
+end
 Base.Sys.__init_build()      # Sys.BINDIR + Sys.STDLIB (from JULIA_BINDIR)
 Base.init_depot_path()       # DEPOT_PATH (JULIA_DEPOT_PATH or default depot)
 Base.init_load_path()        # LOAD_PATH (JULIA_LOAD_PATH, e.g. @:@stdlib)
