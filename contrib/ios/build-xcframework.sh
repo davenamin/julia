@@ -25,6 +25,17 @@
 #                     and shipped as runtime resources next to the
 #                     XCFramework (Project.toml, Manifest.toml,
 #                     packages/<Name>/, artifacts/<sha>/).
+#   REBUILD_SYSIMAGE  When set (=1), force the sysimage to rebuild before
+#                     each slice's `make`, without a clean.  The baked
+#                     sysimage (sys-o.a / sys.dylib) does NOT list your
+#                     IOS_SYSIMAGE_EXTRA_JL / _EXTRA_PROJECT as makefile
+#                     prerequisites, so editing those does not by itself
+#                     invalidate it — `make` would reuse the stale image.
+#                     This removes the stage-3/4 outputs so `make` rebakes
+#                     them with the current extras; the expensive base
+#                     sys.ji and the platform libraries are kept, so the
+#                     rebuild only re-runs the (few-minute) bake, not a
+#                     full ~30-60 min slice build.
 #
 # Limitations:
 #   - The simulator slice is arm64 only (Apple-silicon Macs).  Intel-Mac
@@ -42,6 +53,7 @@ IOS_VERSION_MIN="${IOS_VERSION_MIN:-14.0}"
 FRAMEWORK_NAME="${FRAMEWORK_NAME:-Julia}"
 DEVICE_BUILDDIR="${DEVICE_BUILDDIR:-$JULIA_SRC/build-ios-device}"
 SIM_BUILDDIR="${SIM_BUILDDIR:-$JULIA_SRC/build-ios-sim}"
+REBUILD_SYSIMAGE="${REBUILD_SYSIMAGE:-}"
 OUTPUT_DIR="${1:-$JULIA_SRC/build-ios}"
 
 # Preflight
@@ -84,6 +96,19 @@ build_slice() {
     # Seed the out-of-tree build dir on first run.
     if [[ ! -f "$builddir/Make.inc" ]]; then
         make -C "$JULIA_SRC" O="$builddir" configure
+    fi
+
+    # Force a sysimage rebuild when asked.  IOS_SYSIMAGE_EXTRA_JL / _EXTRA_PROJECT
+    # are consumed at bake time but are not makefile prerequisites of the baked
+    # sysimage, so editing them leaves `make` thinking sys-o.a / sys.dylib are
+    # up to date.  Remove just the stage-3 (extras baked here) and stage-4
+    # outputs; the base sys.ji (stage 2, extras-independent) and the platform
+    # libraries stay, so `make` below only re-runs the bake, not a full build.
+    if [[ -n "$REBUILD_SYSIMAGE" ]]; then
+        local jldir="$builddir/usr/lib/julia"
+        echo "    REBUILD_SYSIMAGE=1: removing baked sysimage in $jldir"
+        rm -f "$jldir/sys-o.a" "$jldir/sys-debug-o.a" \
+              "$jldir/sys.dylib" "$jldir/sys-debug.dylib"
     fi
 
     # Build the libraries + iOS sysimage (default julia-release on iOS now
