@@ -120,10 +120,22 @@ endif
 # unset — so a `using SomePkg` in an EXTRA_JL file would fail to resolve.  The
 # preamble re-runs those init steps (honoring HOST_JULIA_ENV) before the
 # warm-up files load.  Empty for a plain bake with no extras.
+#
+# Also skip generate_precompile.jl's statement collection (pass 0) for
+# extra-package bakes.  That collection spawns host subprocesses that load the
+# sysimage (JLOptions().image_file) and run it to trace precompile statements —
+# but this is a cross-targeted iOS image, and once the extra packages are baked
+# in, loading it on the host trips a package init and the subprocess dies (seen
+# as EPIPE / a hung fake-PTY REPL).  The statements it would collect are generic
+# REPL/interactive signatures of little use to an embedded app anyway; the code
+# the app actually needs is compiled by --compile=all as the workload exercises
+# it.  Plain (no-extras) iOS bakes keep the normal $(JULIA_PRECOMPILE) value.
 ifneq ($(IOS_SYSIMAGE_EXTRA_JL)$(IOS_SYSIMAGE_EXTRA_PROJECT),)
 IOS_SYSIMAGE_PRELOAD := -L $(JULIAHOME)/contrib/ios/sysimage_env_init.jl
+IOS_PRECOMPILE_ARG := 0
 else
 IOS_SYSIMAGE_PRELOAD :=
+IOS_PRECOMPILE_ARG := $(JULIA_PRECOMPILE)
 endif
 
 COMPILER_SRCS := $(addprefix $(JULIAHOME)/, \
@@ -195,7 +207,7 @@ $$(build_private_libdir)/sys$1-o.a : $$(build_private_libdir)/sys.ji $$(JULIAHOM
 			--sysimage $$< \
 			$(IOS_SYSIMAGE_PRELOAD) \
 			$(foreach extra,$(IOS_SYSIMAGE_EXTRA_JL),-L $(extra)) \
-			$$(JULIAHOME)/contrib/generate_precompile.jl $(JULIA_PRECOMPILE); then \
+			$$(JULIAHOME)/contrib/generate_precompile.jl $(IOS_PRECOMPILE_ARG); then \
 		echo '*** iOS sysimage stage 3 (sys$1-o.a) failed.  Try `make cleanall`. ***'; \
 		false; \
 	fi )
