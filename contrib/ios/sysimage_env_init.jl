@@ -39,10 +39,23 @@
 #     in place.  `generate_precompile.jl` then calls `reinit_stdio()` itself,
 #     whose `jl_stdout_stream` returns the sentinel and `init_stdio` derefs
 #     `(void*)1->type` → segfault.
-# `reinit_stdio()` is a supported, repeatable call (base's generate_precompile
-# and test/ccall.jl both use it) and serializes fine: the output image's own
-# `Base.__init__` overwrites these globals at startup before anything reads them.
+# `reinit_stdio()` serializes fine: the output image's own `Base.__init__`
+# overwrites these globals at startup before anything reads them.
+#
+# But it must be called EXACTLY ONCE.  `generate_precompile.jl` (the last script
+# on the stage-3 command line) also calls `reinit_stdio()` — guarded by
+# `!isdefined(Base, :uv_eventloop)`.  A second call wraps the same fd 0/1/2
+# libuv handles in a fresh set of stream objects; our first set is then orphaned
+# and, when GC finalizes it during the long precompile-collect phase,
+# `uvfinalize` calls `jl_close_uv` on the *shared* handle — after which every
+# write to stdout/stderr fails with `EBADF` and the bake dies mid-collect.
+# Define the marker `generate_precompile.jl`'s guard looks for, so it reuses the
+# streams set up here instead of reinitializing.  This binding is inert (nothing
+# else references `uv_eventloop`); alias it to the real `eventloop` so it is not
+# a misleading value.  Only touched for extra-package bakes (preamble not loaded
+# otherwise).
 Base.reinit_stdio()
+isdefined(Base, :uv_eventloop) || @eval Base const uv_eventloop = eventloop
 Base.Sys.__init_build()      # Sys.BINDIR + Sys.STDLIB (from JULIA_BINDIR)
 Base.init_depot_path()       # DEPOT_PATH (JULIA_DEPOT_PATH or default depot)
 Base.init_load_path()        # LOAD_PATH (JULIA_LOAD_PATH, e.g. @:@stdlib)
