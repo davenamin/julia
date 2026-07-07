@@ -19,23 +19,30 @@
 # BLAS/LAPACK forwarding — is live before any warm-up file loads.  These are
 # no-ops for a bake with no extra packages (the preamble isn't loaded then).
 #
-# Point the stdio globals at `devnull`.  In `--output-o` mode `Base.__init__`
-# never ran, so `stdout`/`stderr`/`stdin` are still the raw `Core.CoreSTDOUT`/…
-# handles.  A package that redirects stdio at load/precompile time — Test's
-# `precompile.jl` does `redirect_stdout(devnull) do … end` — then fails to
-# *restore* the saved handle with
-# `MethodError: (::RedirectStdStream)(::Core.CoreSTDOUT)`.
-# NB do NOT use `Base.reinit_stdio()` here: it installs live libuv stream
-# objects (with embedded OS handle pointers), and this process serializes its
-# globals into the output image — baking a live handle corrupts the image
-# (`jl_read_memreflist` abort / `uv_close` assertion on restore).  `devnull` is
-# a handleless singleton that is both redirectable (so save/restore works) and
-# safe to serialize; the device re-inits real stdio via `Base.__init__` anyway.
-# Bake diagnostics/errors still appear: they go through the C-level stderr, not
-# these Julia globals.
-for _s in (:stdin, :stdout, :stderr)
-    setglobal!(Base, _s, Base.devnull)
-end
+# Re-initialize stdio.  In `--output-o` mode `Base.__init__` never ran, so
+# `stdout`/`stderr`/`stdin` are still the raw `Core.CoreSTDOUT`/… handles.  A
+# package that redirects stdio at load/precompile time — Test's `precompile.jl`
+# does `redirect_stdout(devnull) do … end` — must be able to *save* the current
+# stdout and *restore* it afterwards.  `reinit_stdio()` binds the globals to
+# real libuv streams, which is exactly what makes that round-trip work: the
+# save captures a stream whose `.handle` restore writes back into the C-level
+# `jl_uv_stdout`.
+#
+# Two dead ends worth recording, since both looked plausible:
+#   * Leaving the raw `Core.CoreSTDOUT` handle in place makes the *restore*
+#     throw `MethodError: (::RedirectStdStream)(::Core.CoreSTDOUT)` — there is
+#     no redirect method for the core handle.
+#   * Pointing the globals at `devnull` fixes that MethodError but is worse: the
+#     DevNull redirect path stores the sentinel `Ptr{Cvoid}(unix_fd)` (i.e.
+#     `(void*)1`) into `jl_uv_stdout` (see `_redirect_io_cglobal`), and with
+#     stdout==devnull the save/restore re-applies devnull, leaving that sentinel
+#     in place.  `generate_precompile.jl` then calls `reinit_stdio()` itself,
+#     whose `jl_stdout_stream` returns the sentinel and `init_stdio` derefs
+#     `(void*)1->type` → segfault.
+# `reinit_stdio()` is a supported, repeatable call (base's generate_precompile
+# and test/ccall.jl both use it) and serializes fine: the output image's own
+# `Base.__init__` overwrites these globals at startup before anything reads them.
+Base.reinit_stdio()
 Base.Sys.__init_build()      # Sys.BINDIR + Sys.STDLIB (from JULIA_BINDIR)
 Base.init_depot_path()       # DEPOT_PATH (JULIA_DEPOT_PATH or default depot)
 Base.init_load_path()        # LOAD_PATH (JULIA_LOAD_PATH, e.g. @:@stdlib)
