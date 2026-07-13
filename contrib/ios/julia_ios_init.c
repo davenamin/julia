@@ -7,11 +7,31 @@
 #include "julia_ios_init.h"
 
 #include <dlfcn.h>
-#include <julia.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+
+// Locate julia.h wherever the app's build settings expose it.  When the app
+// embeds Julia.xcframework, Xcode's framework search paths make the headers
+// visible as <Julia/...> (Headers/julia/julia.h inside the framework, so the
+// framework-style path is <Julia/julia/julia.h>; <Julia/Julia.h> is the
+// umbrella header).  A plain <julia.h> works when HEADER_SEARCH_PATHS points
+// directly at the framework's Headers/julia directory (or at a julia source
+// tree's usr/include/julia).
+#if defined(__has_include)
+#  if __has_include(<julia.h>)
+#    include <julia.h>
+#  elif __has_include(<Julia/julia/julia.h>)
+#    include <Julia/julia/julia.h>
+#  elif __has_include(<Julia/Julia.h>)
+#    include <Julia/Julia.h>
+#  else
+#    error "julia.h not found - embed Julia.xcframework (its Headers are found via FRAMEWORK_SEARCH_PATHS) or add the framework's Headers/julia directory to HEADER_SEARCH_PATHS"
+#  endif
+#else
+#  include <julia.h>
+#endif
 
 static int is_dir(const char *path)
 {
