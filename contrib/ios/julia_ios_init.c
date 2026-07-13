@@ -11,6 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 
 // Locate julia.h wherever the app's build settings expose it.  When the app
 // embeds Julia.xcframework, Xcode's framework search paths make the headers
@@ -38,6 +41,10 @@ static int is_dir(const char *path)
     struct stat st;
     return path && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
+
+// Set by julia_ios_enable_jit() to suppress the device-default interpreter
+// fallback in julia_ios_init_with_paths.
+static int jit_requested = 0;
 
 // Directory of the Julia framework instance ACTUALLY LOADED into this
 // process, per dyld.  This can differ from the app-bundle framework path:
@@ -121,6 +128,15 @@ void julia_ios_set_paths(const char *resources_path,
     // Sys.STDLIB, which is now correct by virtue of JULIA_BINDIR above.
     setenv("JULIA_LOAD_PATH", "@:@stdlib", 1);
     setenv("JULIA_PROJECT", resources_path, 1);
+
+    // App Store Guideline 2.5.2 guardrail: apps may not download and execute
+    // code.  With Pkg's networking stack shipped and a writable depot, a
+    // stray `Pkg.add`/`Pkg.update` in app code would fetch packages the
+    // interpreter then runs.  Default Pkg to offline mode — resolve /
+    // instantiate keep working against the bundled depot.  overwrite=0: a
+    // value the app already set (e.g. JULIA_PKG_OFFLINE=false before this
+    // call, for a dev build) wins.
+    setenv("JULIA_PKG_OFFLINE", "true", 0);
 }
 
 int julia_ios_init_with_paths(const char *framework_path,
@@ -203,6 +219,20 @@ int julia_ios_init_with_paths(const char *framework_path,
         return -1;
     }
 
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE && \
+    defined(TARGET_OS_SIMULATOR) && !TARGET_OS_SIMULATOR
+    // Physical device: iOS forbids third-party apps from mapping executable
+    // memory, so the JIT cannot work — the first compilation attempt for a
+    // method not baked into the sysimage kills the app with EXC_BAD_ACCESS.
+    // A crash during App Store review is a Guideline 2.1 rejection no matter
+    // the cause, so interpreter fallback is the DEFAULT on device and JIT is
+    // the explicit opt-out (julia_ios_enable_jit, for e.g. side-loaded
+    // development scenarios).  The simulator runs under macOS rules where
+    // the JIT works, so it is unaffected by this default.
+    if (!jit_requested)
+        jl_options.compile_enabled = JL_OPTIONS_COMPILE_MIN;
+#endif
+
     jl_init_with_image(bindir, image);
     return jl_exception_occurred() ? -1 : 0;
 }
@@ -213,6 +243,11 @@ void julia_ios_set_interpreter_fallback(void)
     // (before any app code runs) precisely so embedders can adjust it
     // between load and jl_init; see cli/loader_lib.c.
     jl_options.compile_enabled = JL_OPTIONS_COMPILE_MIN;
+}
+
+void julia_ios_enable_jit(void)
+{
+    jit_requested = 1;
 }
 
 void julia_ios_atexit(void)

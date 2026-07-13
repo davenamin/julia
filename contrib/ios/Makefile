@@ -169,9 +169,55 @@ install-headers: | $(framework_destdirs)
 # at submission validation.  CFBundleIdentifier forbids '_' — sanitize it
 # (the framework/binary name itself keeps the underscore, e.g.
 # libopenblas64_).
+#
+# Every framework also gets a PrivacyInfo.xcprivacy privacy manifest —
+# required since May 2024 for binaries using Apple's "required reason" APIs
+# (rejections arrive as ITMS-91053 mails).  The Julia runtime demonstrably
+# uses three declared categories, so declare them with the standard
+# non-tracking reason codes:
+#   - FileTimestamp / C617.1: stat & friends throughout base/stat.jl,
+#     used on files inside the app container (depot, resources tree).
+#   - DiskSpace / E174.1: Base.diskstat -> uv_fs_statfs (base/file.jl),
+#     checking available space before writes.
+#   - SystemBootTime / 35F9.1: Sys.uptime -> uv_uptime (base/sysinfo.jl)
+#     and mach-time clocks, used to measure elapsed time in-process.
+# The same manifest is stamped into every framework: Apple's scanner checks
+# per-binary, over-declaring is harmless, and per-library symbol analysis
+# would be fragile.  NSPrivacyTracking=false and empty collected-data —
+# the runtime phones nothing home.  Apps whose OWN code uses more
+# categories declare those in the app target's manifest, not here.
+# See contrib/ios/APPSTORE.md.
 install-libs: | $(framework_destdirs)
 	@set -e; \
 	strip_base() { printf '%s' "$$1" | sed -E -e 's/\.dylib$$//' -e ':a' -e 's/\.[0-9]+$$//' -e 'ta'; }; \
+	write_privacy_manifest() { \
+		fw_dir="$$1"; \
+		printf '%s\n' \
+			'<?xml version="1.0" encoding="UTF-8"?>' \
+			'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+			'<plist version="1.0">' \
+			'<dict>' \
+			'  <key>NSPrivacyTracking</key><false/>' \
+			'  <key>NSPrivacyTrackingDomains</key><array/>' \
+			'  <key>NSPrivacyCollectedDataTypes</key><array/>' \
+			'  <key>NSPrivacyAccessedAPITypes</key>' \
+			'  <array>' \
+			'    <dict>' \
+			'      <key>NSPrivacyAccessedAPIType</key><string>NSPrivacyAccessedAPICategoryFileTimestamp</string>' \
+			'      <key>NSPrivacyAccessedAPITypeReasons</key><array><string>C617.1</string></array>' \
+			'    </dict>' \
+			'    <dict>' \
+			'      <key>NSPrivacyAccessedAPIType</key><string>NSPrivacyAccessedAPICategoryDiskSpace</string>' \
+			'      <key>NSPrivacyAccessedAPITypeReasons</key><array><string>E174.1</string></array>' \
+			'    </dict>' \
+			'    <dict>' \
+			'      <key>NSPrivacyAccessedAPIType</key><string>NSPrivacyAccessedAPICategorySystemBootTime</string>' \
+			'      <key>NSPrivacyAccessedAPITypeReasons</key><array><string>35F9.1</string></array>' \
+			'    </dict>' \
+			'  </array>' \
+			'</dict>' \
+			'</plist>' > "$$fw_dir/PrivacyInfo.xcprivacy"; \
+	}; \
 	write_dep_plist() { \
 		fw_dir="$$1"; base="$$2"; \
 		ident=$$(printf '%s' "$$base" | tr '_' '-' | sed -E 's/-+$$//'); \
@@ -237,6 +283,7 @@ install-libs: | $(framework_destdirs)
 	for fw in "$(IOS_FWKS_ROOT)"/*.framework; do \
 		fwname=$$(basename "$$fw" .framework); \
 		bin="$$fw/$$fwname"; \
+		write_privacy_manifest "$$fw"; \
 		[ -f "$$bin" ] || continue; \
 		install_name_tool -id "@rpath/$$fwname.framework/$$fwname" "$$bin" 2>/dev/null || true; \
 		install_name_tool -add_rpath "@loader_path/.." "$$bin" 2>/dev/null || true; \
@@ -299,6 +346,7 @@ framework: build-julia \
 	@echo "     identity, so the ad-hoc build signature does not need to match."
 	@echo ""
 	@echo "For a device+simulator XCFramework set, use contrib/ios/build-xcframework.sh."
+	@echo "Before submitting to the App Store, read contrib/ios/APPSTORE.md."
 	@echo ""
 
 # XCFrameworks — combine pre-built device and simulator framework SETS.

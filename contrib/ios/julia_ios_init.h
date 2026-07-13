@@ -63,6 +63,12 @@ extern "C" {
 // __init__ touches a scratch space fails at load with
 // InitError(... mkdir ... EPERM).  The directory is created if missing
 // (single level; the parent must exist and be writable).
+//
+// Also defaults JULIA_PKG_OFFLINE=true (App Store Guideline 2.5.2: apps may
+// not download and execute code, and `Pkg.add` at runtime would do exactly
+// that).  Pkg.resolve / Pkg.instantiate keep working against the bundled
+// depot.  A value the app sets in the environment BEFORE this call wins —
+// e.g. setenv("JULIA_PKG_OFFLINE", "false", 1) for a development build.
 void julia_ios_set_paths(const char *resources_path,
                          const char *writable_depot_path);
 
@@ -86,6 +92,14 @@ void julia_ios_set_paths(const char *resources_path,
 // writable_depot_path non-NULL but uncreatable, or an exception during
 // jl_init).
 //
+// On PHYSICAL DEVICES this defaults Julia to interpreter fallback
+// (--compile=min): the iOS JIT prohibition means the first compilation of
+// a method not baked into the sysimage would crash the app, and a crash
+// during App Store review is a Guideline 2.1 rejection.  Sysimage-baked
+// code is unaffected (it runs natively); only non-baked code interprets.
+// Call julia_ios_enable_jit() beforehand to opt out (development only).
+// The simulator keeps the JIT.
+//
 // THREADING: the thread this runs on becomes Julia's main thread — all
 // later jl_eval_string / jl_call* invocations must happen on that same
 // thread (or via Julia-side threading primitives).  Initializing on a
@@ -104,14 +118,28 @@ int julia_ios_init_with_paths(const char *framework_path,
 //
 // Why: iOS forbids third-party apps from allocating executable memory,
 // so Julia's JIT cannot run on a physical device — the first call to a
-// method that was not precompiled into sys.dylib would abort the app.
+// method that was not precompiled into the sysimage would abort the app.
 // With interpreter fallback, sysimage-baked code still runs at full
 // native speed, and anything else runs (slowly) in the interpreter
-// instead of crashing.  The iOS simulator runs under macOS rules where
-// the JIT works, so calling this is only required for device builds —
-// but interpreting is also the App Store-safe configuration (executing
-// only code shipped in the bundle).
+// instead of crashing.
+//
+// NOTE: on physical devices julia_ios_init_with_paths applies this mode BY
+// DEFAULT (a JIT crash during App Store review is a Guideline 2.1 rejection;
+// see julia_ios_enable_jit for the opt-out).  Calling this explicitly is
+// therefore only needed to (a) get interpreter semantics on the SIMULATOR,
+// e.g. to reproduce device behavior during development, or (b) force the
+// mode when initializing via raw jl_init* instead of the helper.
 void julia_ios_set_interpreter_fallback(void);
+
+// Opt OUT of the device-default interpreter fallback: keep the JIT enabled
+// on a physical device.  MUST be called before julia_ios_init_with_paths.
+//
+// Only meaningful for scenarios where executable memory is actually
+// available (development side-loading with the right entitlements,
+// jailbroken devices).  On a normal device / App Store build the first JIT
+// compilation will crash the app with EXC_BAD_ACCESS — do not ship this.
+// Has no effect on the simulator, where the JIT is always available.
+void julia_ios_enable_jit(void);
 
 // Run the standard jl_atexit_hook(0).  Call at app teardown.
 void julia_ios_atexit(void);
