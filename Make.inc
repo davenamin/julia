@@ -1820,6 +1820,22 @@ LOADER_DEBUG_INSTALL_DEP_LIBS = $(call build_deplibs, \
     @$(LIBJULIACODEGEN_DEBUG_INSTALL_DEPLIB) \
 )
 
+ifeq ($(IOS),1)
+# iOS App Store layout: apps may not contain loose dylibs, so every dependency
+# library ships as its own single-binary framework next to the Julia framework
+# in the app's Frameworks/ directory (see contrib/ios/Makefile).  The loader
+# resolves each DEP_LIBS entry relative to its own directory (the Julia
+# framework), so ../<base>.framework/<base> lands on the sibling framework.
+# Entry order and the three trailing "special" (@-prefixed) entries mirror the
+# generic definitions above: libgcc_s does not exist on iOS (LIBGCC_NAME is
+# empty), the libstdc++ probing slot is Linux-only (empty "@"), and
+# libjulia-internal / libjulia-codegen load last.
+LOADER_BUILD_DEP_LIBS = ../libopenlibm.framework/libopenlibm:@:@../libjulia-internal.framework/libjulia-internal:@../libjulia-codegen.framework/libjulia-codegen:
+LOADER_DEBUG_BUILD_DEP_LIBS = ../libopenlibm.framework/libopenlibm:@:@../libjulia-internal-debug.framework/libjulia-internal-debug:@../libjulia-codegen-debug.framework/libjulia-codegen-debug:
+LOADER_INSTALL_DEP_LIBS = $(LOADER_BUILD_DEP_LIBS)
+LOADER_DEBUG_INSTALL_DEP_LIBS = $(LOADER_DEBUG_BUILD_DEP_LIBS)
+endif
+
 # Colors for make
 ifndef VERBOSE
 VERBOSE := 0

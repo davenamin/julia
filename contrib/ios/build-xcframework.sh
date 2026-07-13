@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
-# build-xcframework.sh — build a Julia.xcframework that combines iphoneos
+# build-xcframework.sh — build the Julia XCFramework SET combining iphoneos
 # and iphonesimulator slices.  Each slice is a full out-of-tree build
 # (~30-60 min) because the deps (LLVM, OpenLibm, ...) are compiled per
 # platform.
+#
+# App Store rule: apps may not contain loose dylibs — every dynamic library
+# must be its own single-binary framework.  Each slice therefore produces a
+# Frameworks/ directory (Julia.framework plus one framework per dependency
+# dylib and JuliaSysimage.framework; see contrib/ios/Makefile), and this
+# script emits one .xcframework per framework name into
+# <output-dir>/xcframeworks/.  Embed & Sign EVERY xcframework in the app;
+# link only Julia.xcframework (it is the only one with headers).
 #
 # Usage:
 #   contrib/ios/build-xcframework.sh [output-dir]
@@ -123,7 +131,7 @@ build_slice() {
          -j "$JOBS" \
          julia-release
 
-    # Bundle the libraries into a .framework at $install_prefix/$FRAMEWORK_NAME.framework.
+    # Bundle the libraries into per-dylib frameworks at $install_prefix/Frameworks/.
     make -C "$JULIA_SRC/contrib/ios" \
          BUILDROOT="$builddir" prefix="$install_prefix" \
          IOS=1 IOS_PLATFORM="$platform" IOS_VERSION_MIN="$IOS_VERSION_MIN" \
@@ -134,20 +142,36 @@ build_slice() {
 build_slice iphoneos        "$DEVICE_BUILDDIR"
 build_slice iphonesimulator "$SIM_BUILDDIR"
 
-DEVICE_FW="$DEVICE_BUILDDIR/install/${FRAMEWORK_NAME}.framework"
-SIM_FW="$SIM_BUILDDIR/install/${FRAMEWORK_NAME}.framework"
-[[ -d "$DEVICE_FW" ]] || { echo "ERROR: device framework missing at $DEVICE_FW" >&2; exit 1; }
-[[ -d "$SIM_FW"    ]] || { echo "ERROR: simulator framework missing at $SIM_FW" >&2; exit 1; }
+DEVICE_FWKS="$DEVICE_BUILDDIR/install/Frameworks"
+SIM_FWKS="$SIM_BUILDDIR/install/Frameworks"
+[[ -d "$DEVICE_FWKS/${FRAMEWORK_NAME}.framework" ]] || \
+    { echo "ERROR: device frameworks missing at $DEVICE_FWKS" >&2; exit 1; }
+[[ -d "$SIM_FWKS/${FRAMEWORK_NAME}.framework" ]] || \
+    { echo "ERROR: simulator frameworks missing at $SIM_FWKS" >&2; exit 1; }
 
+XCFW_DIR="$OUTPUT_DIR/xcframeworks"
 mkdir -p "$OUTPUT_DIR"
+rm -rf "$XCFW_DIR"
+mkdir -p "$XCFW_DIR"
+# Remove the pre-frameworks-split single xcframework if present, so stale
+# layouts don't linger next to the new output.
 rm -rf "$OUTPUT_DIR/${FRAMEWORK_NAME}.xcframework"
 
 echo
-echo "==> Combining slices into $OUTPUT_DIR/${FRAMEWORK_NAME}.xcframework"
-xcodebuild -create-xcframework \
-    -framework "$DEVICE_FW" \
-    -framework "$SIM_FW" \
-    -output    "$OUTPUT_DIR/${FRAMEWORK_NAME}.xcframework"
+echo "==> Combining slices into $XCFW_DIR (one xcframework per framework)"
+for fw in "$DEVICE_FWKS"/*.framework; do
+    name="$(basename "$fw" .framework)"
+    simfw="$SIM_FWKS/$name.framework"
+    if [[ ! -d "$simfw" ]]; then
+        echo "ERROR: $name.framework exists in the device slice but not the simulator slice" >&2
+        exit 1
+    fi
+    echo "    $name.xcframework"
+    xcodebuild -create-xcframework \
+        -framework "$fw" \
+        -framework "$simfw" \
+        -output    "$XCFW_DIR/$name.xcframework" >/dev/null
+done
 
 # Stage the runtime resources that the iOS app needs alongside the
 # XCFramework: stdlib tree (always), plus the user's extra project's
@@ -290,7 +314,10 @@ package_runtime_resources
 
 echo
 echo "==> Done."
-echo "    XCFramework:     $OUTPUT_DIR/${FRAMEWORK_NAME}.xcframework"
-echo "    Device slice:    $DEVICE_FW"
-echo "    Simulator slice: $SIM_FW"
+echo "    XCFrameworks:    $XCFW_DIR ($(ls -d "$XCFW_DIR"/*.xcframework 2>/dev/null | wc -l | tr -d ' ') total)"
+echo "    Device slice:    $DEVICE_FWKS"
+echo "    Simulator slice: $SIM_FWKS"
 echo "    Resources:       $OUTPUT_DIR/julia-runtime-resources"
+echo
+echo "    Embed & Sign EVERY xcframework under xcframeworks/ in the app"
+echo "    target; link only ${FRAMEWORK_NAME}.xcframework (the one with headers)."

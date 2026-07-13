@@ -377,6 +377,57 @@ JL_DLLEXPORT void *jl_load_dynamic_library(const char *modname, unsigned flags, 
 #endif
     }
 
+#if defined(_OS_IOS_)
+    // iOS App Store bundles must not contain loose dylibs: every dependency
+    // library ships as its own single-binary framework in the app's
+    // Frameworks/ directory (<base>.framework/<base>, where <base> is the
+    // dylib name with its extension and trailing numeric version components
+    // stripped — see contrib/ios/Makefile).  Julia code, however, opens
+    // libraries by their unix-style dylib names: JLL wrappers use SONAME
+    // strings like "@rpath/libgmp.10.dylib", and Base ccalls use plain names
+    // like "libgmp".  When such a name failed to resolve above, retry it at
+    // the framework location.  @loader_path here is the library containing
+    // this code (libjulia-internal), whose own framework sits alongside the
+    // dependency frameworks, so "@loader_path/.." is the Frameworks/ dir.
+    // Absolute paths are excluded: those name real files (e.g. artifact
+    // libraries) and must not be remapped.
+    if (!abspath) {
+        const char *leaf = strrchr(modname, '/');
+        leaf = (leaf == NULL) ? modname : leaf + 1;
+        char base[PATHBUF];
+        strncpy(base, leaf, PATHBUF - 1);
+        base[PATHBUF - 1] = '\0';
+        size_t blen = strlen(base);
+        if (blen > 6 && strcmp(base + blen - 6, ".dylib") == 0) {
+            blen -= 6;
+            base[blen] = '\0';
+        }
+        // strip trailing numeric version components: "libgit2.1.6" -> "libgit2"
+        while (1) {
+            char *dot = strrchr(base, '.');
+            if (dot == NULL || dot == base || dot[1] == '\0')
+                break;
+            const char *p = dot + 1;
+            while (*p >= '0' && *p <= '9')
+                p++;
+            if (*p != '\0')
+                break;
+            *dot = '\0';
+        }
+        if (base[0] != '\0') {
+            ret = snprintf(path, PATHBUF, "@loader_path/../%s.framework/%s", base, base);
+            if (ret > 0 && ret < PATHBUF) {
+                handle = jl_dlopen(path, flags);
+                if (handle) {
+                    if (!(flags & JL_RTLD_NOLOAD))
+                        jl_timing_puts(JL_TIMING_DEFAULT_BLOCK, jl_pathname_for_handle(handle));
+                    return handle;
+                }
+            }
+        }
+    }
+#endif
+
 notfound:
     if (throw_err) {
 #ifdef _OS_WINDOWS_

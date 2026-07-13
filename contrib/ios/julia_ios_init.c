@@ -23,10 +23,10 @@ static int is_dir(const char *path)
 // process, per dyld.  This can differ from the app-bundle framework path:
 // in simulator Debug builds, Xcode's rpath resolves the app's framework
 // link against the Build/Products (DerivedData) copy, not the embedded
-// one.  sys.dylib must be opened from the same instance the runtime was
-// loaded from — opening the embedded copy would drag in a SECOND set of
-// Julia dylibs (dyld dedupes by path, not content) and jl_init then dies
-// with "System image file failed consistency check".
+// one.  The sysimage must be opened from the same framework SET the
+// runtime was loaded from — opening the embedded copy would drag in a
+// SECOND set of Julia dylibs (dyld dedupes by path, not content) and
+// jl_init then dies with "System image file failed consistency check".
 static int loaded_framework_dir(char *out, size_t outsize)
 {
     Dl_info info;
@@ -57,9 +57,9 @@ void julia_ios_set_paths(const char *resources_path)
     // lookups resolve correctly with no post-init patching.  The bin/
     // directory itself need not contain anything (there is no julia
     // executable on iOS); build-xcframework.sh creates it so BINDIR names
-    // a real path.  sys.dylib and the internal/JLL dylibs are NOT found via
-    // BINDIR — they load through dyld @rpath / dladdr — so BINDIR pointing
-    // away from the framework is safe.
+    // a real path.  The sysimage and the dependency libraries are NOT found
+    // via BINDIR — they load from the embedded frameworks through dyld
+    // @rpath / dladdr — so BINDIR pointing away from the frameworks is safe.
     char bindir[2048];
     int n = snprintf(bindir, sizeof(bindir), "%s/bin", resources_path);
     if (n > 0 && (size_t)n < sizeof(bindir))
@@ -91,11 +91,11 @@ int julia_ios_init_with_paths(const char *framework_path,
         return -1;
     }
 
-    // Locate sys.dylib in the framework directory dyld actually loaded
-    // libjulia from (see loaded_framework_dir()); the caller-supplied
+    // Locate the sysimage relative to the framework directory dyld actually
+    // loaded libjulia from (see loaded_framework_dir()); the caller-supplied
     // framework_path is only the fallback if dladdr fails.  This is a
-    // separate concern from JULIA_BINDIR: sys.dylib must come from the
-    // framework, but BINDIR points at the resources tree.
+    // separate concern from JULIA_BINDIR: the sysimage must come from the
+    // loaded framework set, but BINDIR points at the resources tree.
     char fw_dir[2048];
     if (loaded_framework_dir(fw_dir, sizeof(fw_dir)) != 0) {
         int m = snprintf(fw_dir, sizeof(fw_dir), "%s", framework_path);
@@ -110,8 +110,8 @@ int julia_ios_init_with_paths(const char *framework_path,
                 "  %s\n"
                 "which differs from the supplied framework_path\n"
                 "  %s\n"
-                "— using the loaded location for sys.dylib to keep the "
-                "runtime and sysimage in the same framework instance.\n",
+                "— using the loaded location for the sysimage to keep the "
+                "runtime and sysimage in the same framework set.\n",
                 fw_dir, framework_path);
     }
 
@@ -131,10 +131,15 @@ int julia_ios_init_with_paths(const char *framework_path,
         return -1;
     }
 
-    // sys.dylib lives next to libjulia inside the framework.  Pass the
-    // absolute path so jl_init_with_image doesn't derive it from bindir.
+    // The sysimage ships as its own single-binary framework (App Store rule:
+    // no loose dylibs) named JuliaSysimage.framework, a SIBLING of
+    // Julia.framework in the app's Frameworks/ directory.  fw_dir is the
+    // Julia.framework directory, so hop up one level and into the sysimage
+    // framework.  Pass the absolute path so jl_init_with_image doesn't
+    // derive it from bindir.
     char image[2048];
-    int n = snprintf(image, sizeof(image), "%s/sys.dylib", fw_dir);
+    int n = snprintf(image, sizeof(image),
+                     "%s/../JuliaSysimage.framework/JuliaSysimage", fw_dir);
     if (n < 0 || (size_t)n >= sizeof(image)) {
         fprintf(stderr, "julia_ios_init: framework path too long\n");
         return -1;
