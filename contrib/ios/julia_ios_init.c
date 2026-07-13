@@ -63,7 +63,8 @@ static int loaded_framework_dir(char *out, size_t outsize)
     return 0;
 }
 
-void julia_ios_set_paths(const char *resources_path)
+void julia_ios_set_paths(const char *resources_path,
+                         const char *writable_depot_path)
 {
     if (!resources_path)
         return;
@@ -86,11 +87,36 @@ void julia_ios_set_paths(const char *resources_path)
         setenv("JULIA_BINDIR", bindir, 1);
 
     // Depot = where Pkg looks for packages/<Name>/<HASH7>/ and
-    // artifacts/<sha>/.  These live at the resources root, not under
-    // share/julia, so this must be set explicitly (the BINDIR-relative
+    // artifacts/<sha>/.  The bundled depot lives at the resources root (not
+    // under share/julia), so this must be set explicitly (the BINDIR-relative
     // depot default would point at <resources>/share/julia).  No trailing
     // ':' — that would also search ~/.julia, which doesn't exist on iOS.
-    setenv("JULIA_DEPOT_PATH", resources_path, 1);
+    //
+    // The app bundle is READ-ONLY on device.  Julia treats the FIRST depot
+    // entry as the writable one — Scratch.jl spaces (<depot>/scratchspaces),
+    // logs, compiled caches, and Pkg mutations all go there — and a package
+    // whose __init__ touches a scratch space dies with
+    // InitError(... mkdir(".../<app-bundle>/scratchspaces") ... EPERM)
+    // when the bundle depot comes first.  So when the caller supplies a
+    // writable location, put it FIRST and the bundled depot second: reads
+    // (packages/, artifacts/) search every entry, so the baked packages
+    // still resolve from the bundle.
+    if (writable_depot_path && writable_depot_path[0]) {
+        // Best-effort creation: Julia lazily mkpath()s depot subdirs, so the
+        // directory itself need not exist as long as its parent is writable.
+        // EEXIST and other failures are deliberately not fatal here.
+        mkdir(writable_depot_path, 0755);
+        char depot[4096];
+        int d = snprintf(depot, sizeof(depot), "%s:%s",
+                         writable_depot_path, resources_path);
+        if (d > 0 && (size_t)d < sizeof(depot))
+            setenv("JULIA_DEPOT_PATH", depot, 1);
+        else
+            setenv("JULIA_DEPOT_PATH", resources_path, 1);
+    }
+    else {
+        setenv("JULIA_DEPOT_PATH", resources_path, 1);
+    }
     // LOAD_PATH = `@` (active project) + `@stdlib`.  `@stdlib` expands to
     // Sys.STDLIB, which is now correct by virtue of JULIA_BINDIR above.
     setenv("JULIA_LOAD_PATH", "@:@stdlib", 1);
@@ -98,7 +124,8 @@ void julia_ios_set_paths(const char *resources_path)
 }
 
 int julia_ios_init_with_paths(const char *framework_path,
-                              const char *resources_path)
+                              const char *resources_path,
+                              const char *writable_depot_path)
 {
     if (!is_dir(framework_path)) {
         fprintf(stderr, "julia_ios_init: framework_path is not a directory: %s\n",
@@ -109,6 +136,17 @@ int julia_ios_init_with_paths(const char *framework_path,
         fprintf(stderr, "julia_ios_init: resources_path is not a directory: %s\n",
                 resources_path ? resources_path : "(null)");
         return -1;
+    }
+    if (writable_depot_path && writable_depot_path[0] && !is_dir(writable_depot_path)) {
+        // julia_ios_set_paths() will attempt to create it; only reject when
+        // the PARENT can't take a mkdir, since then nothing at runtime could
+        // write there either and package InitErrors would follow.
+        if (mkdir(writable_depot_path, 0755) != 0 && !is_dir(writable_depot_path)) {
+            fprintf(stderr,
+                    "julia_ios_init: writable_depot_path cannot be created: %s\n",
+                    writable_depot_path);
+            return -1;
+        }
     }
 
     // Locate the sysimage relative to the framework directory dyld actually
@@ -136,9 +174,9 @@ int julia_ios_init_with_paths(const char *framework_path,
     }
 
     // Set JULIA_BINDIR / depot / project / load-path from the resources
-    // tree.  Must happen before jl_init: Base reads these env vars and
-    // computes Sys.STDLIB during sysimage load.
-    julia_ios_set_paths(resources_path);
+    // tree (+ the writable depot, when given).  Must happen before jl_init:
+    // Base reads these env vars and computes Sys.STDLIB during sysimage load.
+    julia_ios_set_paths(resources_path, writable_depot_path);
 
     // Point the bindir argument at the same <resources>/bin.  jl_init_with_image
     // assigns it straight into jl_options.julia_bindir (src/jlapi.c), and it

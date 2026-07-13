@@ -22,7 +22,10 @@
 //         let resUrl = Bundle.main.url(forResource: "julia-runtime-resources",
 //                                      withExtension: nil)
 //   else { fatalError("Julia.framework or resources not in bundle") }
-//   julia_ios_init_with_paths(fwUrl.path, resUrl.path)
+//   let depotUrl = FileManager.default.urls(for: .applicationSupportDirectory,
+//                                           in: .userDomainMask)[0]
+//           .appendingPathComponent("julia-depot")
+//   julia_ios_init_with_paths(fwUrl.path, resUrl.path, depotUrl.path)
 //   // ... jl_eval_string("..."), call into Julia ...
 //   julia_ios_atexit()
 
@@ -37,8 +40,12 @@ extern "C" {
 // resolve into the shipped resources tree.  Safe to call before jl_init();
 // no-op if resources_path is NULL.
 //
-//   resources_path: absolute path to the julia-runtime-resources directory
-//                   shipped in the app bundle.
+//   resources_path:      absolute path to the julia-runtime-resources
+//                        directory shipped in the app bundle.
+//   writable_depot_path: absolute path to a WRITABLE directory for Julia's
+//                        primary depot (e.g. a subdirectory of the app's
+//                        Application Support directory).  May be NULL to
+//                        run with only the read-only bundle depot.
 //
 // Sets JULIA_BINDIR=<resources>/bin (so Sys.STDLIB, the CA cert path, and
 // Pkg's stdlib directory — all computed as BINDIR/../share/julia/... —
@@ -46,7 +53,18 @@ extern "C" {
 // JULIA_LOAD_PATH.  Note BINDIR does NOT point at the frameworks: the
 // sysimage and the dependency libraries load via dyld @rpath / the
 // framework-aware dlopen fallback, not relative to BINDIR.
-void julia_ios_set_paths(const char *resources_path);
+//
+// Depot layering: Julia writes to the FIRST depot entry — Scratch.jl spaces
+// (<depot>/scratchspaces), logs, compiled caches, Pkg mutations — while
+// package/artifact lookups search every entry.  The app bundle is read-only
+// on device, so with writable_depot_path set the depot becomes
+// "<writable>:<resources>": writes land in the writable depot and the baked
+// packages still resolve from the bundle.  Without it, any package whose
+// __init__ touches a scratch space fails at load with
+// InitError(... mkdir ... EPERM).  The directory is created if missing
+// (single level; the parent must exist and be writable).
+void julia_ios_set_paths(const char *resources_path,
+                         const char *writable_depot_path);
 
 // NOTE: the framework_path argument (path to Julia.framework) is validated
 // but used only as a fallback for locating the sysimage — the sysimage
@@ -58,12 +76,14 @@ void julia_ios_set_paths(const char *resources_path);
 // fails jl_init's sysimage consistency check.
 //
 // Combines julia_ios_set_paths + jl_init_with_image into one call: it
-// points JULIA_BINDIR at <resources>/bin, opens the sibling
-// JuliaSysimage.framework's binary as the system image, and calls
-// jl_init_with_image.  No post-init patching is needed — Base computes
-// Sys.STDLIB (and Pkg its stdlib dir) from BINDIR, which now resolves into
-// the resources tree.  Returns 0 on success, -1 on failure (framework_path
-// or resources_path missing/not a directory, or an exception during
+// points JULIA_BINDIR at <resources>/bin, layers the writable depot in
+// front of the bundled one (see julia_ios_set_paths — pass NULL to skip),
+// opens the sibling JuliaSysimage.framework's binary as the system image,
+// and calls jl_init_with_image.  No post-init patching is needed — Base
+// computes Sys.STDLIB (and Pkg its stdlib dir) from BINDIR, which now
+// resolves into the resources tree.  Returns 0 on success, -1 on failure
+// (framework_path or resources_path missing/not a directory,
+// writable_depot_path non-NULL but uncreatable, or an exception during
 // jl_init).
 //
 // THREADING: the thread this runs on becomes Julia's main thread — all
@@ -74,7 +94,8 @@ void julia_ios_set_paths(const char *resources_path);
 // all Julia interaction (a dedicated worker thread is the usual choice,
 // so a long-running Julia call can never freeze the UI).
 int julia_ios_init_with_paths(const char *framework_path,
-                              const char *resources_path);
+                              const char *resources_path,
+                              const char *writable_depot_path);
 
 // Force interpreter fallback (--compile=min) for code that is not baked
 // into the sysimage.  MUST be called before julia_ios_init_with_paths /
