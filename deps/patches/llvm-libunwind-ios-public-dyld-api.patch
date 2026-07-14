@@ -1,0 +1,63 @@
+On iOS, avoid the private dyld API _dyld_find_unwind_sections.
+
+Shipping a copy of libunwind inside an iOS app makes Apple's App Store
+validation scan its undefined symbols, and it rejects the binary with
+
+  ITMS-90338: Non-public API usage - The app references non-public symbols
+  in Frameworks/libunwind.framework/libunwind: __dyld_find_unwind_sections
+
+(The OS's own libunwind may use the private call; an app-shipped copy may
+not.)  Replace it, for iOS targets only, with an inline reimplementation on
+public API: dladdr() locates the image containing the target address (slide
+already applied), and getsectiondata() finds its unwind sections.  The
+function keeps the same name and signature so the call site in
+LocalAddressSpace::findUnwindSections is unchanged — but it is now a C++
+(mangled) inline function instead of an undefined extern "C" reference, so
+nothing private appears in the symbol table.  macOS builds keep the dyld
+fast path.
+
+---
+--- a/libunwind/src/AddressSpace.hpp
++++ b/libunwind/src/AddressSpace.hpp
+@@ -60,8 +60,41 @@
+     uintptr_t                   compact_unwind_section_length;
+   };
+ 
++#include <TargetConditionals.h>
++#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
++#include <dlfcn.h>
++#include <mach-o/getsect.h>
++  // iOS: _dyld_find_unwind_sections is dyld-private, and App Store
++  // validation rejects app binaries referencing it (ITMS-90338, non-public
++  // API usage).  Reconstruct the same information with public APIs:
++  // dladdr() locates the image containing the target address (slide
++  // already applied) and getsectiondata() finds its unwind sections.
++  // Same name and signature as the dyld function, but C++ linkage — the
++  // call site in findUnwindSections is unchanged and no private symbol is
++  // referenced.  JIT'd frames are unaffected: on failure the caller falls
++  // through exactly as when the dyld call returns false.
++  inline bool _dyld_find_unwind_sections(void *addr,
++                                         dyld_unwind_sections *info) {
++    Dl_info dlinfo;
++    if (!dladdr(addr, &dlinfo) || dlinfo.dli_fbase == NULL)
++      return false;
++    const struct mach_header_64 *mh =
++        (const struct mach_header_64 *)dlinfo.dli_fbase;
++    unsigned long size = 0;
++    info->mh = (const struct mach_header *)mh;
++    info->dwarf_section = getsectiondata(mh, "__TEXT", "__eh_frame", &size);
++    info->dwarf_section_length = size;
++    size = 0;
++    info->compact_unwind_section =
++        getsectiondata(mh, "__TEXT", "__unwind_info", &size);
++    info->compact_unwind_section_length = size;
++    return info->dwarf_section != NULL ||
++           info->compact_unwind_section != NULL;
++  }
++#else
+   // In 10.7.0 or later, libSystem.dylib implements this function.
+   extern "C" bool _dyld_find_unwind_sections(void *, dyld_unwind_sections *);
++#endif
+ 
+ #elif defined(_LIBUNWIND_SUPPORT_DWARF_UNWIND) && defined(_LIBUNWIND_IS_BAREMETAL)
+ // filler line 67

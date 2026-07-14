@@ -34,13 +34,19 @@ extern int _keymgr_get_and_lock_processwide_ptr_2(unsigned int key, void **resul
 extern int _keymgr_set_lockmode_processwide_ptr(unsigned int key, unsigned int mode);
 #endif
 
-// private dyld3/dyld4 stuff
+// private dyld3/dyld4 stuff.  Not referenced on iOS: even as weak imports
+// these land in the symbol table, and App Store validation rejects apps
+// whose binaries reference private symbols (ITMS-90338).  They exist only
+// to guard the profiler's thread-suspension against dyld-lock deadlocks
+// (macOS 12.1 dlsym4 workaround below); iOS apps don't run the profiler.
+#if !TARGET_OS_IPHONE
 extern void _dyld_atfork_prepare(void) __attribute__((weak_import));
 extern void _dyld_atfork_parent(void) __attribute__((weak_import));
 //extern void _dyld_fork_child(void) __attribute__((weak_import));
 extern void _dyld_dlopen_atfork_prepare(void) __attribute__((weak_import));
 extern void _dyld_dlopen_atfork_parent(void) __attribute__((weak_import));
 //extern void _dyld_dlopen_atfork_child(void) __attribute__((weak_import));
+#endif
 
 static void attach_exception_port(thread_port_t thread, int segv_only);
 
@@ -579,6 +585,7 @@ static int jl_lock_profile_mach(int dlsymlock)
 #else
     int keymgr_locked = 0;
 #endif
+#if !TARGET_OS_IPHONE
     // workaround for new dlsym4 bugs in the workaround for dlsym bugs: _dyld_atfork_prepare
     // acquires its locks in the wrong order, but fortunately we happen to able to guard it
     // with this call to force it to prevent that TSAN violation from causing a deadlock
@@ -587,15 +594,25 @@ static int jl_lock_profile_mach(int dlsymlock)
     // workaround for new dlsym4 bugs (API and bugs introduced circa macOS 12.1)
     if (dlsymlock && _dyld_atfork_prepare != NULL && _dyld_atfork_parent != NULL)
         _dyld_atfork_prepare();
+#else
+    // iOS: the _dyld_atfork* guards are private APIs (see the declarations
+    // above); the profiler that needs them never runs in an app, so the
+    // plain profile lock suffices.
+    (void)dlsymlock;
+#endif
     return keymgr_locked;
 }
 
 static void jl_unlock_profile_mach(int dlsymlock, int keymgr_locked)
 {
+#if !TARGET_OS_IPHONE
     if (dlsymlock && _dyld_atfork_prepare != NULL && _dyld_atfork_parent != NULL)
         _dyld_atfork_parent();
     if (dlsymlock && _dyld_dlopen_atfork_prepare != NULL && _dyld_dlopen_atfork_parent != NULL)
         _dyld_dlopen_atfork_parent();
+#else
+    (void)dlsymlock;
+#endif
 #if !TARGET_OS_IPHONE
     if (keymgr_locked)
         _keymgr_unlock_processwide_ptr(KEYMGR_GCC3_DW2_OBJ_LIST);
@@ -642,17 +659,21 @@ void *mach_profile_listener(void *arg)
                 break;
             }
 
+#if !TARGET_OS_IPHONE
             if (_dyld_dlopen_atfork_prepare != NULL && _dyld_dlopen_atfork_parent != NULL)
                 _dyld_dlopen_atfork_prepare();
             if (_dyld_atfork_prepare != NULL && _dyld_atfork_parent != NULL)
                 _dyld_atfork_prepare(); // briefly acquire the dlsym lock
+#endif
             host_thread_state_t state;
             int valid_thread = jl_thread_suspend_and_get_state2(i, &state);
             unw_context_t *uc = (unw_context_t*)&state;
+#if !TARGET_OS_IPHONE
             if (_dyld_atfork_prepare != NULL && _dyld_atfork_parent != NULL)
                 _dyld_atfork_parent(); // quickly release the dlsym lock
             if (_dyld_dlopen_atfork_prepare != NULL && _dyld_dlopen_atfork_parent != NULL)
                 _dyld_dlopen_atfork_parent();
+#endif
             if (!valid_thread)
                 continue;
             if (running) {
