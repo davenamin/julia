@@ -30,6 +30,20 @@ the runtime phones nothing home.  **Your app's own code** (and any Swift
 SDKs you add) may use more categories, e.g. `UserDefaults`; declare those
 in the app target's own `PrivacyInfo.xcprivacy` — the manifests aggregate.
 
+## Crash symbolication — dSYMs (done by the build)
+
+App Store Connect wants a dSYM for every embedded binary UUID; otherwise
+each upload emits a per-framework "Upload Symbols Failed / The archive did
+not include a dSYM for the <name>.framework" warning (non-blocking, but
+crash reports for those frameworks stay unsymbolicated).  The build runs
+`dsymutil` over every framework binary (the `dsyms` step in
+`contrib/ios/Makefile`) and `build-xcframework.sh` embeds the results into
+each xcframework via `xcodebuild -create-xcframework -debug-symbols` —
+Xcode then copies them into your app archive automatically, and the
+warnings disappear.  Frameworks built without debug info yield small,
+UUID-matched dSYMs, which still satisfies the check and provides function
+names.
+
 ## Export compliance questionnaire (you answer this)
 
 *This is practical guidance, not legal advice.*

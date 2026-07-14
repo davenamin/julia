@@ -355,12 +355,48 @@ codesign:
 			--timestamp=none "$$fw" || exit 1; \
 	done
 
+# dSYM bundles for App Store crash symbolication.
+#
+# App Store Connect wants a dSYM for every embedded binary UUID; without
+# them, each upload produces an "Upload Symbols Failed / The archive did not
+# include a dSYM for the <name>.framework with the UUIDs [...]" warning per
+# framework (non-blocking, but crash reports stay unsymbolicated).  Generate
+# one dSYM per framework binary here; build-xcframework.sh embeds them into
+# the xcframeworks via `xcodebuild -create-xcframework -debug-symbols`, and
+# Xcode then copies them into the app archive automatically.
+#
+# The dSYMs live OUTSIDE the frameworks (a dSYM inside an app bundle is
+# itself invalid).  UUID correctness: LC_UUID is fixed at link time —
+# install_name_tool surgery and codesigning don't change it — so dSYMs
+# generated from the packaged binaries match what ships.  Deps built
+# without -g yield near-empty dSYMs; that still satisfies the UUID check
+# and provides symbol names.
+IOS_DSYMS_ROOT := $(DESTDIR)$(prefix)/Frameworks-dSYMs
+
+dsyms: install-libs
+	@set -e; \
+	rm -rf "$(IOS_DSYMS_ROOT)"; mkdir -p "$(IOS_DSYMS_ROOT)"; \
+	for fw in "$(IOS_FWKS_ROOT)"/*.framework; do \
+		fwname=$$(basename "$$fw" .framework); \
+		bin="$$fw/$$fwname"; \
+		[ -f "$$bin" ] || continue; \
+		if ! xcrun dsymutil "$$bin" \
+				-o "$(IOS_DSYMS_ROOT)/$$fwname.framework.dSYM"; then \
+			echo "WARNING: dsymutil failed for $$fwname — App Store Connect" \
+			     "will warn about missing symbols for it" >&2; \
+			rm -rf "$(IOS_DSYMS_ROOT)/$$fwname.framework.dSYM"; \
+		fi; \
+	done
+
 # Explicit inter-step dependencies so the framework target is safe under
 # `make -j` (prerequisites of a single target carry no ordering guarantee):
 # libraries must exist before codesign runs, and the built tree must exist
-# before anything is copied out of it.
+# before anything is copied out of it.  codesign also waits for dsyms:
+# signing rewrites the binaries in place, and dsymutil must not read a file
+# mid-rewrite (the UUID itself is unaffected by signing, so the generated
+# dSYMs stay valid for the signed binaries).
 install-headers install-libs: build-julia
-codesign: install-libs install-headers \
+codesign: install-libs install-headers dsyms \
 	$(IOS_FWDIR)/Info.plist \
 	$(IOS_FWKS_ROOT)/$(IOS_FRAMEWORK_MODULES)/module.modulemap \
 	$(IOS_FWKS_ROOT)/$(IOS_FRAMEWORK_HEADERS)/$(IOS_FRAMEWORK_NAME).h
@@ -369,7 +405,7 @@ framework: build-julia \
 	$(IOS_FWDIR)/Info.plist \
 	$(IOS_FWKS_ROOT)/$(IOS_FRAMEWORK_MODULES)/module.modulemap \
 	$(IOS_FWKS_ROOT)/$(IOS_FRAMEWORK_HEADERS)/$(IOS_FRAMEWORK_NAME).h \
-	install-headers install-libs codesign
+	install-headers install-libs dsyms codesign
 	@echo ""
 	@echo "iOS frameworks built successfully ($(IOS_PLATFORM)):"
 	@echo "  $(IOS_FWKS_ROOT)"
@@ -413,6 +449,7 @@ xcframework:
 	@set -e; \
 	outdir="$(DESTDIR)$(prefix)/xcframeworks"; \
 	rm -rf "$$outdir"; mkdir -p "$$outdir"; \
+	abs() { case "$$1" in /*) printf '%s' "$$1" ;; *) printf '%s' "$$(pwd)/$$1" ;; esac; }; \
 	for fw in "$(IOS_DEVICE_FRAMEWORKS)"/*.framework; do \
 		name=$$(basename "$$fw" .framework); \
 		simfw="$(IOS_SIM_FRAMEWORKS)/$$name.framework"; \
@@ -420,9 +457,13 @@ xcframework:
 			echo "Error: $$name.framework exists in the device set but not the simulator set"; \
 			exit 1; \
 		fi; \
-		xcodebuild -create-xcframework \
-			-framework "$$fw" \
-			-framework "$$simfw" \
+		set -- -framework "$$fw"; \
+		ddsym="$(IOS_DEVICE_FRAMEWORKS)/../Frameworks-dSYMs/$$name.framework.dSYM"; \
+		if [ -d "$$ddsym" ]; then set -- "$$@" -debug-symbols "$$(abs "$$ddsym")"; fi; \
+		set -- "$$@" -framework "$$simfw"; \
+		sdsym="$(IOS_SIM_FRAMEWORKS)/../Frameworks-dSYMs/$$name.framework.dSYM"; \
+		if [ -d "$$sdsym" ]; then set -- "$$@" -debug-symbols "$$(abs "$$sdsym")"; fi; \
+		xcodebuild -create-xcframework "$$@" \
 			-output "$$outdir/$$name.xcframework"; \
 	done
 	@echo ""
@@ -432,8 +473,9 @@ xcframework:
 
 clean:
 	rm -rf $(IOS_FWKS_ROOT)
+	rm -rf $(IOS_DSYMS_ROOT)
 	rm -rf $(DESTDIR)$(prefix)/$(IOS_FRAMEWORK_DIR)
 	rm -rf $(DESTDIR)$(prefix)/$(IOS_XCFRAMEWORK_DIR)
 	rm -rf $(DESTDIR)$(prefix)/xcframeworks
 
-.PHONY: default framework build-julia install-headers install-libs codesign xcframework clean
+.PHONY: default framework build-julia install-headers install-libs dsyms codesign xcframework clean

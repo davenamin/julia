@@ -64,6 +64,11 @@ SIM_BUILDDIR="${SIM_BUILDDIR:-$JULIA_SRC/build-ios-sim}"
 REBUILD_SYSIMAGE="${REBUILD_SYSIMAGE:-}"
 OUTPUT_DIR="${1:-$JULIA_SRC/build-ios}"
 
+# xcodebuild's -debug-symbols requires absolute paths; normalize overrides.
+[[ "$DEVICE_BUILDDIR" = /* ]] || DEVICE_BUILDDIR="$PWD/$DEVICE_BUILDDIR"
+[[ "$SIM_BUILDDIR"    = /* ]] || SIM_BUILDDIR="$PWD/$SIM_BUILDDIR"
+[[ "$OUTPUT_DIR"      = /* ]] || OUTPUT_DIR="$PWD/$OUTPUT_DIR"
+
 # Preflight
 [[ "$(uname -s)" == "Darwin" ]] || { echo "ERROR: requires macOS" >&2; exit 1; }
 command -v xcodebuild >/dev/null 2>&1 || { echo "ERROR: install Xcode" >&2; exit 1; }
@@ -157,6 +162,9 @@ mkdir -p "$XCFW_DIR"
 # layouts don't linger next to the new output.
 rm -rf "$OUTPUT_DIR/${FRAMEWORK_NAME}.xcframework"
 
+DEVICE_DSYMS="$DEVICE_BUILDDIR/install/Frameworks-dSYMs"
+SIM_DSYMS="$SIM_BUILDDIR/install/Frameworks-dSYMs"
+
 echo
 echo "==> Combining slices into $XCFW_DIR (one xcframework per framework)"
 for fw in "$DEVICE_FWKS"/*.framework; do
@@ -166,11 +174,22 @@ for fw in "$DEVICE_FWKS"/*.framework; do
         echo "ERROR: $name.framework exists in the device slice but not the simulator slice" >&2
         exit 1
     fi
+    # Embed per-slice dSYMs (produced by the Makefile's `dsyms` step) so
+    # Xcode copies them into app archives — this is what satisfies App Store
+    # Connect's "Upload Symbols" check for each embedded framework UUID.
+    # -debug-symbols requires absolute paths and must follow the -framework
+    # it belongs to.
+    args=( -framework "$fw" )
+    if [[ -d "$DEVICE_DSYMS/$name.framework.dSYM" ]]; then
+        args+=( -debug-symbols "$DEVICE_DSYMS/$name.framework.dSYM" )
+    fi
+    args+=( -framework "$simfw" )
+    if [[ -d "$SIM_DSYMS/$name.framework.dSYM" ]]; then
+        args+=( -debug-symbols "$SIM_DSYMS/$name.framework.dSYM" )
+    fi
     echo "    $name.xcframework"
-    xcodebuild -create-xcframework \
-        -framework "$fw" \
-        -framework "$simfw" \
-        -output    "$XCFW_DIR/$name.xcframework" >/dev/null
+    xcodebuild -create-xcframework "${args[@]}" \
+        -output "$XCFW_DIR/$name.xcframework" >/dev/null
 done
 
 # Stage the runtime resources that the iOS app needs alongside the
