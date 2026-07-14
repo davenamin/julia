@@ -160,9 +160,23 @@ install-headers: | $(framework_destdirs)
 #
 # Install-name surgery on every framework binary:
 #   - LC_ID_DYLIB               ->  @rpath/<base>.framework/<base>
-#   - LC_LOAD_DYLIB (@rpath/*)  ->  @rpath/<mapped-base>.framework/<mapped-base>
+#   - every LC_LOAD_DYLIB that is not a system path (/usr/lib, /System) and
+#     not already framework-style -> @rpath/<mapped-base>.framework/<mapped-base>.
+#     This includes ABSOLUTE build-tree paths: autotools/CMake-built deps
+#     stamp them (e.g. libgmpxx recorded /.../build-ios-device/usr/lib/
+#     libgmp.10.dylib, which crashed app launch with dyld "Library not
+#     loaded" on device).
 #   - add LC_RPATH @loader_path/..  (frameworks are siblings, so each binary
 #     can resolve the others without relying on the app's rpath setup)
+# A verification pass then re-scans every emitted binary and FAILS the build
+# if any load command remains that is neither a system path nor a reference
+# to a framework that was actually emitted — so a dep with a surprising
+# install-name shape breaks here, at build time, not at app launch.
+#
+# Not bundled: libgmpxx (GMP's C++ bindings), libLTO and libRemarks (LLVM
+# tooling libs).  Nothing in the Julia runtime references any of them, they
+# add three frameworks and real megabytes to every app, and libgmpxx was
+# the absolute-path crasher above.
 #
 # Each dependency framework gets a minimal Info.plist: CFBundleExecutable
 # must match the binary, and MinimumOSVersion / platform keys are required
@@ -261,6 +275,7 @@ install-libs: | $(framework_destdirs)
 		name=$$(basename "$$lib"); \
 		case "$$name" in \
 			libjulia.*|libccalltest*|libccalllazy*|libllvmcalltest*) continue ;; \
+			libgmpxx*|libLTO*|libRemarks*) continue ;; \
 		esac; \
 		case "$$name" in \
 			libjulia-internal*|libjulia-codegen*) base="$${name%%.*}" ;; \
@@ -287,7 +302,11 @@ install-libs: | $(framework_destdirs)
 		[ -f "$$bin" ] || continue; \
 		install_name_tool -id "@rpath/$$fwname.framework/$$fwname" "$$bin" 2>/dev/null || true; \
 		install_name_tool -add_rpath "@loader_path/.." "$$bin" 2>/dev/null || true; \
-		for dep in $$(otool -L "$$bin" 2>/dev/null | tail -n +2 | awk '{print $$1}' | grep '^@rpath/'); do \
+		for dep in $$(otool -L "$$bin" 2>/dev/null | tail -n +2 | awk '{print $$1}'); do \
+			case "$$dep" in \
+				/usr/lib/*|/System/*) continue ;; \
+				@rpath/*.framework/*) continue ;; \
+			esac; \
 			leaf="$${dep##*/}"; \
 			case "$$leaf" in \
 				libjulia.$(SHLIB_EXT)|libjulia.[0-9]*.$(SHLIB_EXT)) \
@@ -299,7 +318,27 @@ install-libs: | $(framework_destdirs)
 			esac; \
 			install_name_tool -change "$$dep" "@rpath/$$tgt.framework/$$tgt" "$$bin" 2>/dev/null || true; \
 		done; \
-	done
+	done; \
+	fail=0; \
+	for fw in "$(IOS_FWKS_ROOT)"/*.framework; do \
+		fwname=$$(basename "$$fw" .framework); \
+		bin="$$fw/$$fwname"; \
+		[ -f "$$bin" ] || continue; \
+		for dep in $$(otool -L "$$bin" 2>/dev/null | tail -n +2 | awk '{print $$1}'); do \
+			case "$$dep" in \
+				/usr/lib/*|/System/*) ;; \
+				@rpath/*.framework/*) \
+					tfw="$${dep#@rpath/}"; tfw="$${tfw%%/*}"; \
+					[ -d "$(IOS_FWKS_ROOT)/$$tfw" ] || { \
+						echo "ERROR: $$fwname references '$$dep' but" \
+						     "$$tfw is not among the emitted frameworks" >&2; \
+						fail=1; }; ;; \
+				*) echo "ERROR: $$fwname still references '$$dep'," \
+				        "which cannot resolve on a device" >&2; fail=1 ;; \
+			esac; \
+		done; \
+	done; \
+	[ "$$fail" = 0 ] || { echo "ERROR: unresolvable load commands remain (see above)." >&2; exit 1; }
 
 # Codesign every framework.
 #
