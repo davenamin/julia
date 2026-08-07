@@ -44,6 +44,11 @@ else
 end
 
 function __init__()
+    # These are `const` arrays serialized into the sysimage, and `__init__` has
+    # already run once during the image build — so repopulate them from scratch
+    # instead of appending the build machine's paths again at every startup.
+    empty!(PATH_list)
+    empty!(LIBPATH_list)
     # make sure OpenBLAS does not set CPU affinity (#1070, #9639)
     if !haskey(ENV, "OPENBLAS_MAIN_FREE")
         ENV["OPENBLAS_MAIN_FREE"] = "1"
@@ -64,7 +69,12 @@ function __init__()
 
     # As mentioned above, we are sneaking this in here so that we don't have to
     # depend on CSL_jll and load _all_ of its libraries.
-    dlopen(_libgfortran)
+    @static if !Base.IOS
+        # On iOS there is no libgfortran (see CompilerSupportLibraries_jll);
+        # OpenBLAS itself is built with NOFORTRAN there (FC is unset in
+        # Make.inc when IOS=1), so it has no libgfortran dependency either.
+        dlopen(_libgfortran)
+    end
 
     global libopenblas_handle = dlopen(libopenblas)
     global libopenblas_path = dlpath(libopenblas_handle)
