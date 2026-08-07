@@ -713,7 +713,84 @@ static inline const char *find_cpu_name(uint32_t cpu)
     return ::find_cpu_name(cpu, cpus, ncpu_names);
 }
 
-#if defined _CPU_AARCH64_ && defined _OS_DARWIN_
+#if defined _CPU_AARCH64_ && defined _OS_IOS_
+
+// Ask the kernel which extensions this chip has, rather than assuming.
+// Absent or unreadable keys read as absent, so an unfamiliar device gets the
+// baseline instead of a guess.  The `hw.optional.arm.FEAT_*` names have been
+// present since iOS 15, comfortably below the 16.4 deployment target.
+static inline bool ios_has_feature(const char *name)
+{
+    int32_t val = 0;
+    size_t len = sizeof(val);
+    if (sysctlbyname(name, &val, &len, NULL, 0) != 0)
+        return false;
+    return val != 0;
+}
+
+// `test_all_bits` does not apply to two FeatureLists: it compares with `==`,
+// which FeatureList does not define.  It has `&`, `~` and `empty()`, so ask
+// the same question as "no bit of the mask is missing from the features".
+static inline bool ios_has_all(const FeatureList<feature_sz> &features,
+                               const FeatureList<feature_sz> &mask)
+{
+    return (mask & ~features).empty();
+}
+
+// The Darwin/aarch64 path below reports an M1 for anything it does not
+// recognise, which is a safe floor on a Mac — every Apple Silicon Mac is at
+// least an M1 — and wrong on a device, where the app runs on whatever the
+// customer owns, down to the oldest chip the deployment target admits.
+// Claiming M1 features here would make a multiversioned sysimage dispatch to
+// a clone built for extensions the chip traps on: `apple-a13` and later carry
+// SHA3, from which LLVM builds the `EOR3`/`XAR` pair that Random's SIMD
+// generator lowers to, so an A12 would fault inside `rand`.
+static NOINLINE std::pair<uint32_t,FeatureList<feature_sz>> _get_host_cpu()
+{
+    // ARMv8.0-A with CRC and the base crypto extensions: every arm64 device
+    // iOS 16 runs on has these, and it is what `apple-a7` names.
+    FeatureList<feature_sz> features = Feature::apple_a7;
+
+    struct { const char *sysctl; uint32_t bit; } probes[] = {
+        { "hw.optional.arm.FEAT_LSE",     Feature::lse },
+        { "hw.optional.arm.FEAT_RDM",     Feature::rdm },
+        { "hw.optional.arm.FEAT_FP16",    Feature::fullfp16 },
+        { "hw.optional.arm.FEAT_DotProd", Feature::dotprod },
+        { "hw.optional.arm.FEAT_JSCVT",   Feature::jsconv },
+        { "hw.optional.arm.FEAT_FCMA",    Feature::complxnum },
+        { "hw.optional.arm.FEAT_LRCPC",   Feature::rcpc },
+        { "hw.optional.arm.FEAT_LRCPC2",  Feature::rcpc_immo },
+        { "hw.optional.arm.FEAT_SHA3",    Feature::sha3 },
+        { "hw.optional.arm.FEAT_FHM",     Feature::fp16fml },
+        { "hw.optional.arm.FEAT_FlagM",   Feature::flagm },
+        { "hw.optional.arm.FEAT_FlagM2",  Feature::altnzcv },
+        { "hw.optional.arm.FEAT_SB",      Feature::sb },
+        { "hw.optional.arm.FEAT_SSBS",    Feature::ssbs },
+        { "hw.optional.arm.FEAT_BF16",    Feature::bf16 },
+        { "hw.optional.arm.FEAT_I8MM",    Feature::i8mm },
+    };
+    for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++)
+        if (ios_has_feature(probes[i].sysctl))
+            set_bit(features, probes[i].bit, true);
+
+    // Name the newest core whose features are all present, so that a
+    // `-C` list naming specific chips can still match.  The feature set is
+    // what actually gates the dispatch; this only labels it.
+    uint32_t cpu = (uint32_t)CPU::apple_a7;
+    if (ios_has_all(features, Feature::apple_m1))
+        cpu = (uint32_t)CPU::apple_m1;
+    else if (ios_has_all(features, Feature::apple_a13))
+        cpu = (uint32_t)CPU::apple_a13;
+    else if (ios_has_all(features, Feature::apple_a12))
+        cpu = (uint32_t)CPU::apple_a12;
+    else if (ios_has_all(features, Feature::apple_a11))
+        cpu = (uint32_t)CPU::apple_a11;
+    else if (ios_has_all(features, Feature::apple_a10))
+        cpu = (uint32_t)CPU::apple_a10;
+    return std::make_pair(cpu, features);
+}
+
+#elif defined _CPU_AARCH64_ && defined _OS_DARWIN_
 
 static NOINLINE std::pair<uint32_t,FeatureList<feature_sz>> _get_host_cpu()
 {
