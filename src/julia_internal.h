@@ -16,7 +16,7 @@
 #include "support/rle.h"
 #include <ctype.h>
 #include <stdint.h>
-#include <uv.h>
+#include "uv.h"
 #include <llvm-c/Types.h>
 #include <llvm-c/Orc.h>
 #include <llvm-version.h>
@@ -908,6 +908,12 @@ JL_DLLEXPORT jl_value_t *jl_eval_globalref(jl_globalref_t *g, size_t world);
 jl_value_t *jl_get_globalref_value(jl_globalref_t *gr, size_t world);
 jl_value_t *jl_get_global_value(jl_module_t *m, jl_sym_t *var, size_t world);
 jl_value_t *jl_interpret_opaque_closure(jl_opaque_closure_t *clos, jl_value_t **args, size_t nargs);
+// Whether this build performs `:foreigncall` in the interpreter instead of
+// requiring codegen; see src/interpreter-ccall.c.
+int jl_foreigncall_interpretable(void) JL_NOTSAFEPOINT;
+jl_value_t *jl_interpret_foreigncall(jl_value_t *fexpr, jl_value_t *evaluated_fexpr,
+                                     jl_value_t *rt, jl_svec_t *at, size_t nreq,
+                                     jl_sym_t *cc, jl_value_t **argv, size_t nargs);
 jl_value_t *jl_interpret_toplevel_thunk(jl_module_t *m, jl_code_info_t *src);
 jl_value_t *jl_interpret_toplevel_expr_in(jl_module_t *m, jl_value_t *e,
                                           jl_code_info_t *src,

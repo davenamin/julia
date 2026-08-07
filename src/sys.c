@@ -23,7 +23,9 @@
 #include <sys/sysctl.h>
 #endif
 #include <sys/wait.h>
+#if !defined(TARGET_OS_IPHONE) || !TARGET_OS_IPHONE
 #include <sys/ptrace.h>
+#endif
 #include <sys/mman.h>
 #include <dlfcn.h>
 #include <grp.h>

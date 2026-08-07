@@ -78,6 +78,11 @@ ifeq ($(DARWIN_FRAMEWORK), 1)
 else
 	@printf "%s\n" "const DARWIN_FRAMEWORK = false" >> $@
 endif
+ifeq ($(IOS), 1)
+	@printf "%s\n" "const IOS = true" >> $@
+else
+	@printf "%s\n" "const IOS = false" >> $@
+endif
 ifeq ($(OS), Darwin)
 	@printf "%s\n" "const MACOS_PRODUCT_VERSION = \"$(shell sw_vers -productVersion)\"" >> $@
 	@printf "%s\n" "const MACOS_PLATFORM_VERSION = \"$(shell xcrun --show-sdk-version)\"" >> $@

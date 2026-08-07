@@ -59,6 +59,7 @@ SRCS := \
 	threading scheduler stackwalk null_sysimage \
 	method jlapi signal-handling safepoint timing subtype rtutils \
 	crc32c APInt-C processor ircode opaque_closure codegen-stubs coverage runtime_ccall engine \
+	interpreter-ccall \
 	$(GC_SRCS)
 
 RT_LLVMLINK :=
@@ -181,10 +182,34 @@ ifeq ($(OS), WINNT)
 RT_LLVMLINK += -luuid -lole32
 endif
 
+ifeq ($(IOS), 1)
+# iOS cross-compilation: llvm-config is built for iOS and cannot execute on
+# the macOS host, so the $(shell $(LLVM_CONFIG_HOST) ...) calls above return
+# empty strings. Override the LLVM variables with values derived from the
+# known build-prefix layout.
+LLVM_LDFLAGS := -L$(build_libdir)
+LLVM_CXXFLAGS := -I$(build_includedir) -std=c++17 -fno-exceptions -fno-rtti \
+    -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -DNDEBUG
+# Static LLVM libraries for libjulia-internal
+# (APInt-C, coverage, processor, runtime_ccall, gc-heap-snapshot use LLVMSupport)
+# In LLVM 15, Triple/host-detection symbols still live in LLVMSupport; the
+# separate LLVMTargetParser archive only exists from LLVM 16 onwards.
+RT_LLVMLINK := $(LLVM_LDFLAGS) -lLLVMSupport -lLLVMDemangle -lz
+# Shared LLVM library for libjulia-codegen
+CG_LLVMLINK := $(LLVM_LDFLAGS) -lLLVM
+# libffi, for interpreter-ccall.c.  Static and folded into libjulia-internal:
+# an App Store bundle may not contain loose dylibs, so a shared library would
+# cost another framework for a single consumer.
+RT_LLVMLINK += -lffi
+endif # IOS
+
 CLANG_LDFLAGS := $(LLVM_LDFLAGS)
 ifeq ($(OS), Darwin)
 CLANG_LDFLAGS += -Wl,-undefined,dynamic_lookup
+ifneq ($(IOS), 1)
+# These dyld fork hooks are not available on iOS
 OSLIBS += -Wl,-U,__dyld_atfork_parent -Wl,-U,__dyld_atfork_prepare -Wl,-U,__dyld_dlopen_atfork_parent -Wl,-U,__dyld_dlopen_atfork_prepare
+endif
 LIBJULIA_PATH_REL := @rpath/libjulia
 else
 LIBJULIA_PATH_REL := libjulia
@@ -212,10 +237,19 @@ CODEGEN_OBJS := $(CODEGEN_SRCS:%=$(BUILDDIR)/%.o)
 CODEGEN_DOBJS := $(CODEGEN_SRCS:%=$(BUILDDIR)/%.dbg.obj)
 
 # Add SONAME defines so we can embed proper `dlopen()` calls.
+# On iOS the sysimage lives next to the framework binary (no lib/julia/ subdir),
+# so the compiled-in path is just the bare filename.
+ifeq ($(IOS), 1)
+ADDL_SHIPFLAGS  := -DJL_SYSTEM_IMAGE_PATH=$(call shell_escape,$(call c_escape,sys.$(SHLIB_EXT))) \
+                   -DJL_LIBJULIA_SONAME=$(call shell_escape,$(call c_escape,$(LIBJULIA_PATH_REL).$(JL_MAJOR_SHLIB_EXT)))
+ADDL_DEBUGFLAGS := -DJL_SYSTEM_IMAGE_PATH=$(call shell_escape,$(call c_escape,sys-debug.$(SHLIB_EXT))) \
+                   -DJL_LIBJULIA_SONAME=$(call shell_escape,$(call c_escape,$(LIBJULIA_PATH_REL)-debug.$(JL_MAJOR_SHLIB_EXT)))
+else
 ADDL_SHIPFLAGS  := -DJL_SYSTEM_IMAGE_PATH=$(call shell_escape,$(call c_escape,$(call normalize_path,$(build_private_libdir_rel)/sys.$(SHLIB_EXT)))) \
                    -DJL_LIBJULIA_SONAME=$(call shell_escape,$(call c_escape,$(LIBJULIA_PATH_REL).$(JL_MAJOR_SHLIB_EXT)))
 ADDL_DEBUGFLAGS := -DJL_SYSTEM_IMAGE_PATH=$(call shell_escape,$(call c_escape,$(call normalize_path,$(build_private_libdir_rel)/sys-debug.$(SHLIB_EXT)))) \
                    -DJL_LIBJULIA_SONAME=$(call shell_escape,$(call c_escape,$(LIBJULIA_PATH_REL)-debug.$(JL_MAJOR_SHLIB_EXT)))
+endif
 
 SHIPFLAGS         += $(FLAGS) $(ADDL_SHIPFLAGS)
 DEBUGFLAGS        += $(FLAGS) $(ADDL_DEBUGFLAGS)
@@ -414,11 +448,21 @@ $(BUILDDIR)/support/libsupport.a: $(addprefix $(SRCDIR)/support/,*.h *.c *.S *.i
 $(BUILDDIR)/support/libsupport-debug.a: $(addprefix $(SRCDIR)/support/,*.h *.c *.S *.inc) $(SRCDIR)/support/*.c
 	$(MAKE) -C $(SRCDIR)/support debug BUILDDIR='$(abspath $(BUILDDIR)/support)'
 
+ifeq ($(USE_CROSS_FLISP), 1)
+# For cross-compilation, the host flisp executable is built via the host/
+# sub-build in src/flisp/.  We do not need the target libflisp.a first.
+$(FLISP_EXECUTABLE_release): $(addprefix $(SRCDIR)/flisp/,*.h *.c)
+	$(MAKE) -C $(BUILDDIR)/flisp $(subst $(abspath $(BUILDDIR)/flisp)/,,$(abspath $(FLISP_EXECUTABLE_release)))
+
+$(FLISP_EXECUTABLE_debug): $(addprefix $(SRCDIR)/flisp/,*.h *.c)
+	$(MAKE) -C $(BUILDDIR)/flisp $(subst $(abspath $(BUILDDIR)/flisp)/,,$(abspath $(FLISP_EXECUTABLE_debug)))
+else
 $(FLISP_EXECUTABLE_release): $(BUILDDIR)/flisp/libflisp.a
 	$(MAKE) -C $(BUILDDIR)/flisp $(subst $(abspath $(BUILDDIR)/flisp)/,,$(abspath $(FLISP_EXECUTABLE_release)))
 
 $(FLISP_EXECUTABLE_debug): $(BUILDDIR)/flisp/libflisp-debug.a
 	$(MAKE) -C $(BUILDDIR)/flisp $(subst $(abspath $(BUILDDIR)/flisp)/,,$(abspath $(FLISP_EXECUTABLE_debug)))
+endif
 
 $(BUILDDIR)/flisp/libflisp.a: $(addprefix $(SRCDIR)/flisp/,*.h *.c) $(BUILDDIR)/support/libsupport.a $(BUILDDIR)/julia.expmap
 	$(MAKE) -C $(SRCDIR)/flisp BUILDDIR='$(abspath $(BUILDDIR)/flisp)'
