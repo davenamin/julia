@@ -751,9 +751,15 @@ static NOINLINE std::pair<uint32_t,FeatureList<feature_sz>> _get_host_cpu()
     // iOS 16 runs on has these, and it is what `apple-a7` names.
     FeatureList<feature_sz> features = Feature::apple_a7;
 
-    struct { const char *sysctl; uint32_t bit; } probes[] = {
+    // Image dispatch derives the *disabled* feature set as the complement of
+    // this one and rejects any image target that enables a bit missing here,
+    // so an extension that is present but never asked about is as fatal as an
+    // absent one.  Cover every leaf the `apple-*` masks below can contain,
+    // even where nothing in Julia emits it yet.
+    static const struct { const char *sysctl; uint32_t bit; } probes[] = {
         { "hw.optional.arm.FEAT_LSE",     Feature::lse },
         { "hw.optional.arm.FEAT_RDM",     Feature::rdm },
+        { "hw.optional.arm.FEAT_DPB",     Feature::ccpp },
         { "hw.optional.arm.FEAT_FP16",    Feature::fullfp16 },
         { "hw.optional.arm.FEAT_DotProd", Feature::dotprod },
         { "hw.optional.arm.FEAT_JSCVT",   Feature::jsconv },
@@ -762,16 +768,48 @@ static NOINLINE std::pair<uint32_t,FeatureList<feature_sz>> _get_host_cpu()
         { "hw.optional.arm.FEAT_LRCPC2",  Feature::rcpc_immo },
         { "hw.optional.arm.FEAT_SHA3",    Feature::sha3 },
         { "hw.optional.arm.FEAT_FHM",     Feature::fp16fml },
+        { "hw.optional.arm.FEAT_DIT",     Feature::dit },
         { "hw.optional.arm.FEAT_FlagM",   Feature::flagm },
         { "hw.optional.arm.FEAT_FlagM2",  Feature::altnzcv },
+        { "hw.optional.arm.FEAT_DPB2",    Feature::ccdp },
+        { "hw.optional.arm.FEAT_FRINTTS", Feature::fptoint },
         { "hw.optional.arm.FEAT_SB",      Feature::sb },
         { "hw.optional.arm.FEAT_SSBS",    Feature::ssbs },
+        { "hw.optional.arm.FEAT_PAuth",   Feature::pauth },
+        { "hw.optional.arm.FEAT_BTI",     Feature::bti },
         { "hw.optional.arm.FEAT_BF16",    Feature::bf16 },
         { "hw.optional.arm.FEAT_I8MM",    Feature::i8mm },
     };
     for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++)
         if (ios_has_feature(probes[i].sysctl))
             set_bit(features, probes[i].bit, true);
+
+    // LLVM models the architecture level itself as a feature, and every
+    // `armv8_*a` mask — hence every `apple-*` mask — carries it.  No sysctl
+    // reports it, so recover each level from the extensions it makes
+    // mandatory; without these bits the detected set is a strict subset of
+    // even `apple-a11` and no image target can match.
+    bool v8_1a = test_nbit(features, Feature::lse) &&
+                 test_nbit(features, Feature::rdm);
+    bool v8_2a = v8_1a && test_nbit(features, Feature::ccpp);
+    bool v8_3a = v8_2a && test_nbit(features, Feature::jsconv) &&
+                 test_nbit(features, Feature::complxnum) &&
+                 test_nbit(features, Feature::rcpc);
+    bool v8_4a = v8_3a && test_nbit(features, Feature::dit) &&
+                 test_nbit(features, Feature::rcpc_immo) &&
+                 test_nbit(features, Feature::flagm);
+    bool v8_5a = v8_4a && test_nbit(features, Feature::sb) &&
+                 test_nbit(features, Feature::ccdp) &&
+                 test_nbit(features, Feature::altnzcv) &&
+                 test_nbit(features, Feature::fptoint);
+    bool v8_6a = v8_5a && test_nbit(features, Feature::i8mm) &&
+                 test_nbit(features, Feature::bf16);
+    set_bit(features, Feature::v8_1a, v8_1a);
+    set_bit(features, Feature::v8_2a, v8_2a);
+    set_bit(features, Feature::v8_3a, v8_3a);
+    set_bit(features, Feature::v8_4a, v8_4a);
+    set_bit(features, Feature::v8_5a, v8_5a);
+    set_bit(features, Feature::v8_6a, v8_6a);
 
     // Name the newest core whose features are all present, so that a
     // `-C` list naming specific chips can still match.  The feature set is

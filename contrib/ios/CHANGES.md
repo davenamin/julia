@@ -56,9 +56,12 @@ Conventions for work on this branch:
 - `src/processor_arm.cpp` — detect the device's extensions from the
   `hw.optional.arm.FEAT_*` sysctls on iOS.  The Darwin/aarch64 path reports an
   M1 for anything it does not recognise, which is a safe floor on a Mac and
-  wrong on a phone; left as it was for macOS.  Only matters for a
-  multiversioned `IOS_CPU_TARGET`, where it decides which clone runs — but it
-  decides it wrongly, so multiversioning could not have worked without this.
+  wrong on a phone; left as it was for macOS.  This gates image loading, not
+  just multiversioned dispatch: the loader derives the disabled feature set as
+  the complement of the detected one and refuses any image target that enables
+  a bit outside it, so the detected set has to include the architecture-level
+  markers LLVM models as features and every leaf the `apple-*` masks name,
+  neither of which a sysctl reports directly.
 - `src/interpreter-ccall.c` (new), `src/interpreter.c`, `src/toplevel.c` —
   perform `:foreigncall` in the interpreter instead of requiring codegen, **on
   iOS builds only**, using libffi's `ffi_call`.  Dispatching to an existing
