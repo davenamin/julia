@@ -2116,6 +2116,141 @@ for (mmname, smname, elty) in
     end
 end
 
+## Apple Accelerate ##########################################################
+#
+# A performance layer, not a source of missing functionality.  The iOS
+# OpenBLAS is cross-compiled with `FC := false` (Make.inc) so its Fortran
+# probe fails and it builds NOFORTRAN — but OpenBLAS answers that by setting
+# `C_LAPACK=1` (Makefile.system), building LAPACK from the f2c-translated C
+# sources.  It sets NO_LAPACK only under `ONLY_CBLAS=1`, which nothing here
+# does.  A device run confirms it: every LAPACK symbol `report()` probes binds
+# to libopenblas64_.  Accelerate is a public system framework carrying both
+# BLAS and LAPACK, costs nothing in app size (it lives in the dyld shared
+# cache), and needs no entitlement.
+#
+# It is layered OVER OpenBLAS rather than replacing it: `LinearAlgebra.__init__`
+# forwards OpenBLAS with `clear=true` first and Accelerate second, and
+# libblastrampoline resolves each symbol to the LAST library forwarded that
+# has it.  So Accelerate wins wherever it has a symbol and OpenBLAS fills the
+# gaps.  That ordering is also the trade: on a current macOS/iOS, Accelerate
+# covers every symbol `report()` probes, so the LAPACK behind the dense
+# factorizations becomes Apple's rather than OpenBLAS's.  Which LAPACK version
+# that is on a given OS is worth knowing rather than assuming —
+# contrib/ios/test-accelerate.jl prints both, and `LAPACK.version()` reports
+# whichever the trampoline resolved.
+const ACCELERATE_PATH = "/System/Library/Frameworks/Accelerate.framework/Accelerate"
+
+# Accelerate's 64-bit-integer BLAS/LAPACK is exposed under decorated symbol
+# names, available from iOS 16.4 / macOS 13.3 on — which is why Make.inc floors
+# IOS_VERSION_MIN at 16.4.  The undecorated symbols are the legacy LP64
+# interface, and `BLAS.check()` calls `exit()` when no ILP64 library is loaded,
+# so the decorated one is required rather than preferred.
+#
+# Apple drops the F77 trailing underscore when decorating: `dgemm_` becomes
+# `dgemm$NEWLAPACK$ILP64`, not `dgemm_$NEWLAPACK$ILP64`.  libblastrampoline
+# expresses that with a leading `\x1a` on the suffix, which its
+# `build_symbol_name` strips along with one underscore from the symbol.  The
+# `\x1a` is not optional: `lbt_forward` searches `suffix_hint` first and the
+# undecorated `""` second, so a hint that matches nothing falls through to the
+# LP64 symbols and forwards the legacy interface — which an ILP64 build cannot
+# call, leaving Accelerate loaded and backing nothing.
+const ACCELERATE_ILP64_SUFFIX = "\x1a\$NEWLAPACK\$ILP64"
+
+# The decorated form of one symbol, used to check the interface is present
+# before forwarding rather than discovering it afterwards.
+const ACCELERATE_ILP64_PROBE = "dgemm\$NEWLAPACK\$ILP64"
+
+# Enough of a spread to show whether BLAS, dense LAPACK factorizations and the
+# eigen/SVD drivers each landed somewhere sensible.
+const REPORT_SYMBOLS = ("dgemm_", "daxpy_", "dgetrf_", "dpotrf_", "dgeqrf_",
+                        "dsyevr_", "dgesdd_", "dtrtrs_")
+
+"""
+    BLAS.forward_accelerate!(; verbose::Bool = false)
+
+Forward Apple's Accelerate framework into `libblastrampoline` on top of
+whatever is already forwarded, and return `(nforwarded, reason)` — `reason` is
+`nothing` on success, or a string explaining why nothing was forwarded.
+
+Never throws and never clears: a failure leaves the existing configuration
+exactly as it was.  Called automatically from `LinearAlgebra.__init__` on iOS;
+callable by hand anywhere Accelerate exists (macOS included) to check coverage.
+
+Set `JULIA_NO_ACCELERATE=1` to skip it, which is how the OpenBLAS-only
+configuration is measured against this one on the same device.
+"""
+function forward_accelerate!(; verbose::Bool = false)
+    if Base.get_bool_env("JULIA_NO_ACCELERATE", false) === true
+        return 0, "disabled by JULIA_NO_ACCELERATE"
+    end
+    # dlopen first, deliberately, rather than `isfile`: on iOS the framework
+    # exists only inside the dyld shared cache, so there is no file to stat,
+    # and we want a clear reason string rather than whatever LBT does with a
+    # path it cannot open.
+    handle = Base.Libc.Libdl.dlopen(ACCELERATE_PATH; throw_error = false)
+    if handle === nothing
+        return 0, "could not dlopen $ACCELERATE_PATH"
+    end
+    # Check for the decorated interface before forwarding, not after.  LBT
+    # falls back to the undecorated LP64 symbols when the hint matches nothing,
+    # and there is no way to un-forward a library once it is in the config.
+    if Base.Libc.Libdl.dlsym(handle, ACCELERATE_ILP64_PROBE; throw_error = false) === nothing
+        return 0, string("Accelerate has no `", ACCELERATE_ILP64_PROBE, "`; its ",
+                         "ILP64 interface needs iOS 16.4 / macOS 13.3 or newer")
+    end
+    nforwarded = lbt_forward(ACCELERATE_PATH; clear = false, verbose = verbose,
+                             suffix_hint = ACCELERATE_ILP64_SUFFIX)
+    if nforwarded == 0
+        return 0, "libblastrampoline forwarded no symbols from Accelerate"
+    end
+    # The probe above says the symbols exist; this says LBT actually bound them
+    # as ILP64.  A library detected as LP64 in an ILP64 build sits in the config
+    # backing nothing, which is worth a distinct message rather than a count
+    # that looks like success.
+    for lib in lbt_get_config().loaded_libs
+        if occursin("Accelerate.framework", lib.libname) && lib.interface !== :ilp64
+            return 0, string("Accelerate was forwarded as ", lib.interface,
+                             " (suffix \"", lib.suffix, "\"), not ilp64")
+        end
+    end
+    return Int(nforwarded), nothing
+end
+
+"""
+    BLAS.report([io])
+
+Print which library actually backs the BLAS/LAPACK calls this process makes.
+
+Intended for the case where you cannot attach a debugger — an app on a device
+— so it answers, in one place: is an ILP64 library loaded at all (without one
+`BLAS.check()` terminates the process), did Accelerate load, and which library
+is behind each of a representative spread of symbols.
+"""
+function report(io::IO = stderr)
+    println(io, "Julia BLAS configuration")
+    println(io, "  Base.IOS         = ", Base.IOS)
+    println(io, "  USE_BLAS64       = ", USE_BLAS64, "  (BlasInt = ", BlasInt, ")")
+    config = get_config()
+    println(io, "  loaded libraries = ", length(config.loaded_libs))
+    for lib in config.loaded_libs
+        println(io, "    - ", lib.libname)
+        println(io, "        interface=", lib.interface,
+                    " suffix=", repr(lib.suffix), " f2c=", lib.f2c)
+    end
+    interface = USE_BLAS64 ? :ilp64 : :lp64
+    println(io, "  backing library per symbol (", interface, "):")
+    for sym in REPORT_SYMBOLS
+        lib = try
+            lbt_find_backing_library(sym, interface; config = config)
+        catch
+            nothing
+        end
+        println(io, "    ", rpad(sym, 10), " -> ",
+                lib === nothing ? "UNBOUND (calling this aborts the process)" : lib.libname)
+    end
+    return nothing
+end
+
 end # module
 
 function copyto!(dest::Array{T}, rdest::AbstractRange{Ti},

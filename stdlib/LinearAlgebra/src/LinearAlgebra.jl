@@ -663,7 +663,25 @@ end
 function __init__()
     try
         BLAS.lbt_forward(OpenBLAS_jll.libopenblas_path; clear=true)
+        @static if Base.IOS
+            # Layer Accelerate over the OpenBLAS base — on iOS that is the only
+            # source of LAPACK at all, since the cross-built OpenBLAS has none.
+            # Order is load-bearing: libblastrampoline resolves each symbol to
+            # the last library forwarded that has it, so this takes precedence
+            # where it can and leaves OpenBLAS backing the rest.
+            nacc, why = BLAS.forward_accelerate!()
+            if nacc == 0
+                @warn """
+                    Accelerate was not forwarded, so LAPACK is missing on this \
+                    platform: dense factorizations (lu, cholesky, qr, eigen, svd, \
+                    and `\\`) will abort the process rather than throw. \
+                    Call LinearAlgebra.BLAS.report() for the full picture.""" reason=why
+            end
+        end
         BLAS.check()
+        if Base.get_bool_env("JULIA_BLAS_REPORT", false) === true
+            BLAS.report()
+        end
     catch ex
         Base.showerror_nostdio(ex, "WARNING: Error during initialization of module LinearAlgebra")
     end
