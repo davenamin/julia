@@ -61,6 +61,14 @@ $(foreach link,base $(JULIAHOME)/test,$(eval $(call symlink_target,$(link),$$(bu
 julia_flisp.boot.inc.phony: julia-deps
 	@$(MAKE) $(QUIET_MAKE) -C $(BUILDROOT)/src julia_flisp.boot.inc.phony
 
+# When cross-compiling, host-native versions of flisp's library dependencies
+# (libuv, utf8proc) must be built before the host flisp executable can link.
+ifeq ($(USE_CROSS_FLISP), 1)
+julia_flisp.boot.inc.phony: | julia-host-deps
+julia-host-deps: julia-deps
+	@$(MAKE) $(QUIET_MAKE) -C $(BUILDROOT)/deps install-host-libuv install-host-utf8proc
+endif
+
 # Build the HTML docs (skipped if already exists, notably in tarballs)
 $(BUILDROOT)/doc/_build/html/en/index.html: $(shell find $(BUILDROOT)/base $(BUILDROOT)/doc \( -path $(BUILDROOT)/doc/_build -o -path $(BUILDROOT)/doc/deps -o -name *_constants.jl -o -name *_h.jl -o -name version_git.jl \) -prune -o -type f -print)
 	@$(MAKE) docs
@@ -106,7 +114,28 @@ julia-sysimg-bc : julia-stdlib julia-base julia-cli-$(JULIA_BUILD_MODE) julia-sr
 julia-sysimg-release julia-sysimg-debug : julia-sysimg-% : julia-sysimg-ji julia-src-%
 	@$(MAKE) $(QUIET_MAKE) -C $(BUILDROOT) -f sysimage.mk sysimg-$*
 
+ifeq ($(IOS), 1)
+# iOS cross-compile: no host-runnable julia in the iOS BUILDROOT, so we
+# can't bootstrap the sysimage or the libccalltest/libllvmcalltest shims
+# directly.  Build the libraries; when IOS_SYSIMAGE=1 also drive sysimage
+# generation by re-using the in-tree host julia at $(JULIAHOME)/usr/bin/julia
+# (produced by a standard `make` in the source tree, without IOS=1).
+ ifeq ($(IOS_SYSIMAGE), 1)
+julia-debug julia-release : julia-% : julia-src-% julia-sysimg-ios-% julia-symlink
+ else
+julia-debug julia-release : julia-% : julia-src-% julia-symlink
+ endif
+
+# iOS sysimage targets — driven by sysimage-ios.mk, which mirrors sysimage.mk
+# but invokes $(HOST_JULIA) for the bake stages and cross-emits via --target.
+# Depends on julia-stdlib + julia-base so that $(BUILDROOT)/base/build_h.jl
+# and $(BUILDROOT)/usr/share/julia/stdlib/ exist before the host julia tries
+# to load them during the sys.ji bake.
+julia-sysimg-ios-release julia-sysimg-ios-debug : julia-sysimg-ios-% : julia-stdlib julia-base julia-src-% | $(build_private_libdir)
+	@$(MAKE) $(QUIET_MAKE) -C $(BUILDROOT) -f $(JULIAHOME)/sysimage-ios.mk sysimg-ios-$*
+else
 julia-debug julia-release : julia-% : julia-sysimg-% julia-src-% julia-symlink julia-libccalltest julia-libllvmcalltest julia-base-cache
+endif
 
 stdlibs-cache-release stdlibs-cache-debug : stdlibs-cache-% : julia-%
 	@$(MAKE) $(QUIET_MAKE) -C $(BUILDROOT) -f pkgimage.mk all-$*
@@ -559,6 +588,14 @@ app:
 
 darwinframework:
 	$(MAKE) -C $(JULIAHOME)/contrib/mac/framework
+
+ios-framework:
+	$(MAKE) -C $(JULIAHOME)/contrib/ios IOS=1 framework
+
+ios-xcframework:
+	$(MAKE) -C $(JULIAHOME)/contrib/ios IOS=1 xcframework \
+		IOS_DEVICE_FRAMEWORK=$(IOS_DEVICE_FRAMEWORK) \
+		IOS_SIM_FRAMEWORK=$(IOS_SIM_FRAMEWORK)
 
 light-source-dist.tmp: $(BUILDROOT)/doc/_build/html/en/index.html
 ifneq ($(BUILDROOT),$(JULIAHOME))

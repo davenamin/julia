@@ -19,6 +19,7 @@
  *          _OS_LINUX_
  *          _OS_WINDOWS_
  *          _OS_DARWIN_
+ *          _OS_IOS_        (subset of _OS_DARWIN_)
  *          _OS_EMSCRIPTEN_
  *
  *      CPU/Architecture:
@@ -87,6 +88,10 @@
 #define _OS_WINDOWS_
 #elif defined(__APPLE__) && defined(__MACH__)
 #define _OS_DARWIN_
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE || defined(JL_IOS)
+#define _OS_IOS_
+#endif
 #elif defined(__EMSCRIPTEN__)
 #define _OS_EMSCRIPTEN_
 #endif

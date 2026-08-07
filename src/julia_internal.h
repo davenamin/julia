@@ -13,7 +13,7 @@
 #include "support/strtod.h"
 #include "gc-alloc-profiler.h"
 #include "support/rle.h"
-#include <uv.h>
+#include "uv.h"
 #include <llvm-c/Types.h>
 #include <llvm-c/Orc.h>
 #if !defined(_WIN32)
@@ -752,6 +752,12 @@ jl_value_t *jl_toplevel_eval_flex(jl_module_t *m, jl_value_t *e, int fast, int e
 
 jl_value_t *jl_eval_global_var(jl_module_t *m JL_PROPAGATES_ROOT, jl_sym_t *e);
 jl_value_t *jl_interpret_opaque_closure(jl_opaque_closure_t *clos, jl_value_t **args, size_t nargs);
+// Whether this build performs `:foreigncall` in the interpreter instead of
+// requiring codegen; see src/interpreter-ccall.c.
+int jl_foreigncall_interpretable(void) JL_NOTSAFEPOINT;
+jl_value_t *jl_interpret_foreigncall(jl_value_t *fexpr, jl_value_t *evaluated_fexpr,
+                                     jl_value_t *rt, jl_svec_t *at, size_t nreq,
+                                     jl_sym_t *cc, jl_value_t **argv, size_t nargs);
 jl_value_t *jl_interpret_toplevel_thunk(jl_module_t *m, jl_code_info_t *src);
 jl_value_t *jl_interpret_toplevel_expr_in(jl_module_t *m, jl_value_t *e,
                                           jl_code_info_t *src,
