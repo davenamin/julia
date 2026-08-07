@@ -4,7 +4,7 @@ LIBWHICH_TAR_URL = https://api.github.com/repos/vtjnash/libwhich/tarball/$1
 $(eval $(call git-external,libwhich,LIBWHICH,,,$(BUILDDIR)))
 
 LIBWHICH_OBJ_LIB := $(build_depsbindir)/libwhich
-LIBWHICH_MFLAGS := CC="$(HOSTCC)"
+LIBWHICH_MFLAGS := CC="$(HOSTCC) $(HOST_CFLAGS)"
 
 $(BUILDDIR)/$(LIBWHICH_SRC_DIR)/build-compiled: $(BUILDDIR)/$(LIBWHICH_SRC_DIR)/source-extracted
 	$(MAKE) -C $(dir $<) $(LIBWHICH_MFLAGS) libwhich
