@@ -81,6 +81,12 @@ const VERBOSE = Ref{Bool}(false)
 function __init__()
     VERBOSE[] = Base.get_bool_env("JULIA_VERBOSE_LINKING", false)
 
+    # These are `const` arrays serialized into the sysimage, and `__init__` has
+    # already run once during the image build — so repopulate them from scratch
+    # instead of appending the build machine's paths again at every startup.
+    empty!(PATH_list)
+    empty!(LIBPATH_list)
+
     __init_lld_path()
     __init_dsymutil_path()
     PATH[] = dirname(lld_path[])

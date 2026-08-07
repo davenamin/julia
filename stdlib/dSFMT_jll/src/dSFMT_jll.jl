@@ -27,6 +27,11 @@ else
 end
 
 function __init__()
+    # These are `const` arrays serialized into the sysimage, and `__init__` has
+    # already run once during the image build — so repopulate them from scratch
+    # instead of appending the build machine's paths again at every startup.
+    empty!(PATH_list)
+    empty!(LIBPATH_list)
     global libdSFMT_handle = dlopen(libdSFMT)
     global libdSFMT_path = dlpath(libdSFMT_handle)
     global artifact_dir = dirname(Sys.BINDIR)

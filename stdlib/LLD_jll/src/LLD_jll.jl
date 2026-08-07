@@ -83,6 +83,11 @@ function init_lld_path()
 end
 
 function __init__()
+    # These are `const` arrays serialized into the sysimage, and `__init__` has
+    # already run once during the image build — so repopulate them from scratch
+    # instead of appending the build machine's paths again at every startup.
+    empty!(PATH_list)
+    empty!(LIBPATH_list)
     global artifact_dir = dirname(Sys.BINDIR)
     init_lld_path()
     PATH[] = dirname(lld_path)

@@ -21,6 +21,11 @@ libunwind_path::String = ""
 const libunwind = "libunwind.so.8"
 
 function __init__()
+    # These are `const` arrays serialized into the sysimage, and `__init__` has
+    # already run once during the image build — so repopulate them from scratch
+    # instead of appending the build machine's paths again at every startup.
+    empty!(PATH_list)
+    empty!(LIBPATH_list)
     # We only do something on Linux/FreeBSD
     @static if Sys.islinux() || Sys.isfreebsd()
         global libunwind_handle = dlopen(libunwind)
