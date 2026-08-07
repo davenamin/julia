@@ -13,9 +13,13 @@ platform but only called automatically under `Base.IOS`; and the libgit2
 cmake patch, which only widens the guard on a framework search and so
 changes nothing off Apple's embedded platforms.
 
-Kept as one topical commit per change, with fixes folded into the commit
-that introduced them rather than appended — the history is meant to be
-readable as an inventory, not as a diary.
+Conventions for work on this branch:
+
+- One topical commit per change, and each commit builds on its own.
+- History is not rewritten once pushed, so a later fix is its own commit
+  rather than a fold-in.
+- Comments describe the design as it stands and why it is that way, without
+  narrating the change that produced it.
 
 ## New files
 
