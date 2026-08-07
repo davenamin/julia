@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] sancov: explicitly construct std::string for createOrDie
+
+The pattern `SpecialCaseList::createOrDie({{ClBlacklist}}, ...)` constructs
+a `std::vector<std::string>` whose single element is a `std::string` built
+from a `cl::opt<std::string>` via its implicit conversion.
+
+Recent libc++ (Xcode 16+ / iPhoneOS 26+ SDKs) added a new template
+constructor to `std::basic_string`:
+
+    template <class _Tp>
+    explicit basic_string(const _Tp& __t);
+
+In the copy-initialization context of an initializer-list element, the
+compiler now selects this explicit constructor for the inner brace-init
+and rejects the call ("chosen constructor is explicit in
+copy-initialization").
+
+Constructing the `std::string` directly with parens uses
+direct-initialization (which may invoke explicit constructors), so the
+inner element is already a `std::string` and no further conversion is
+needed.
+
+--- a/llvm/tools/sancov/sancov.cpp
++++ b/llvm/tools/sancov/sancov.cpp
+@@ -529,10 +529,10 @@
+       return std::unique_ptr<SpecialCaseList>();
+ 
+     if (!ClBlacklist.empty())
+-      return SpecialCaseList::createOrDie({{ClBlacklist}},
++      return SpecialCaseList::createOrDie({std::string(ClBlacklist)},
+                                           *vfs::getRealFileSystem());
+ 
+-    return SpecialCaseList::createOrDie({{ClIgnorelist}},
++    return SpecialCaseList::createOrDie({std::string(ClIgnorelist)},
+                                         *vfs::getRealFileSystem());
+   }
+   std::unique_ptr<SpecialCaseList> DefaultIgnorelist;

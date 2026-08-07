@@ -5,7 +5,7 @@ ifneq ($(USE_BINARYBUILDER_GMP),1)
 
 GMP_CONFIGURE_OPTS := $(CONFIGURE_COMMON)
 GMP_CONFIGURE_OPTS += --enable-cxx --enable-shared --disable-static
-GMP_CONFIGURE_OPTS += CC_FOR_BUILD="$(HOSTCC)"
+GMP_CONFIGURE_OPTS += CC_FOR_BUILD="$(HOSTCC) $(HOST_CFLAGS)"
 
 ifeq ($(BUILD_ARCH),x86_64)
 GMP_CONFIGURE_OPTS += --enable-fat
@@ -35,34 +35,17 @@ $(SRCCACHE)/gmp-$(GMP_VER)/source-extracted: $(SRCCACHE)/gmp-$(GMP_VER).tar.bz2
 checksum-gmp: $(SRCCACHE)/gmp-$(GMP_VER).tar.bz2
 	$(JLCHECKSUM) $<
 
-# Apply fix to avoid using Apple ARM reserved register X18
-# Necessary for version 6.2.1, remove after next gmp release
-$(SRCCACHE)/gmp-$(GMP_VER)/gmp-HG-changeset.patch-applied: $(SRCCACHE)/gmp-$(GMP_VER)/source-extracted
-	cd $(dir $@) && \
-		patch -p1 -f < $(SRCDIR)/patches/gmp-HG-changeset.patch
-	echo 1 > $@
-
-$(SRCCACHE)/gmp-$(GMP_VER)/gmp-exception.patch-applied: $(SRCCACHE)/gmp-$(GMP_VER)/gmp-HG-changeset.patch-applied
+$(SRCCACHE)/gmp-$(GMP_VER)/gmp-exception.patch-applied: $(SRCCACHE)/gmp-$(GMP_VER)/source-extracted
 	cd $(dir $@) && \
 		patch -p1 -f < $(SRCDIR)/patches/gmp-exception.patch
 	echo 1 > $@
 
-$(SRCCACHE)/gmp-$(GMP_VER)/gmp_alloc_overflow_func.patch-applied: $(SRCCACHE)/gmp-$(GMP_VER)/gmp-exception.patch-applied
+$(SRCCACHE)/gmp-$(GMP_VER)/gmp-alloc_overflow.patch-applied: $(SRCCACHE)/gmp-$(GMP_VER)/gmp-exception.patch-applied
 	cd $(dir $@) && \
-		patch -p1 -f < $(SRCDIR)/patches/gmp_alloc_overflow_func.patch
+		patch -p1 -f < $(SRCDIR)/patches/gmp-alloc_overflow.patch
 	echo 1 > $@
 
-$(SRCCACHE)/gmp-$(GMP_VER)/gmp-CVE-2021-43618.patch-applied: $(SRCCACHE)/gmp-$(GMP_VER)/gmp_alloc_overflow_func.patch-applied
-	cd $(dir $@) && \
-		patch -p1 -f < $(SRCDIR)/patches/gmp-CVE-2021-43618.patch
-	echo 1 > $@
-
-$(SRCCACHE)/gmp-$(GMP_VER)/gmp-more_alloc_overflow.patch-applied: $(SRCCACHE)/gmp-$(GMP_VER)/gmp-CVE-2021-43618.patch-applied
-	cd $(dir $@) && \
-		patch -p1 -f < $(SRCDIR)/patches/gmp-more_alloc_overflow.patch
-	echo 1 > $@
-
-$(SRCCACHE)/gmp-$(GMP_VER)/source-patched: $(SRCCACHE)/gmp-$(GMP_VER)/gmp-more_alloc_overflow.patch-applied
+$(SRCCACHE)/gmp-$(GMP_VER)/source-patched: $(SRCCACHE)/gmp-$(GMP_VER)/gmp-alloc_overflow.patch-applied
 	echo 1 > $@
 
 $(BUILDDIR)/gmp-$(GMP_VER)/build-configured: $(SRCCACHE)/gmp-$(GMP_VER)/source-patched

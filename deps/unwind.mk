@@ -89,7 +89,7 @@ check-unwind: $(BUILDDIR)/libunwind-$(UNWIND_VER)/build-checked
 
 ## LLVM libunwind ##
 
-LLVMUNWIND_OPTS := $(CMAKE_COMMON) -DCMAKE_BUILD_TYPE=MinSizeRel -DLIBUNWIND_ENABLE_PEDANTIC=OFF -DLLVM_CONFIG_PATH=$(build_depsbindir)/llvm-config
+LLVMUNWIND_OPTS := $(CMAKE_COMMON) -DCMAKE_BUILD_TYPE=MinSizeRel -DLIBUNWIND_ENABLE_PEDANTIC=OFF -DLLVM_PATH=$(SRCCACHE)/$(LLVM_SRC_DIR)/llvm -DLLVM_CONFIG_PATH=$(build_depsbindir)/llvm-config
 
 $(SRCCACHE)/llvmunwind-$(LLVMUNWIND_VER).tar.xz: | $(SRCCACHE)
 	$(JLDOWNLOAD) $@ https://github.com/llvm/llvm-project/releases/download/llvmorg-$(LLVMUNWIND_VER)/libunwind-$(LLVMUNWIND_VER).src.tar.xz
@@ -116,10 +116,17 @@ $(SRCCACHE)/llvmunwind-$(LLVMUNWIND_VER)/llvm-libunwind-freebsd-libgcc-api-compa
 	cd $(SRCCACHE)/llvmunwind-$(LLVMUNWIND_VER) && patch -p2 -f < $(SRCDIR)/patches/llvm-libunwind-freebsd-libgcc-api-compat.patch
 	echo 1 > $@
 
+# iOS: replace the private _dyld_find_unwind_sections with a public-API
+# reimplementation — App Store validation rejects app-shipped binaries that
+# reference private dyld symbols (ITMS-90338).  No effect on macOS builds.
+$(SRCCACHE)/llvmunwind-$(LLVMUNWIND_VER)/llvm-libunwind-ios-public-dyld-api.patch-applied: $(SRCCACHE)/llvmunwind-$(LLVMUNWIND_VER)/llvm-libunwind-freebsd-libgcc-api-compat.patch-applied
+	cd $(SRCCACHE)/llvmunwind-$(LLVMUNWIND_VER) && patch -p2 -f < $(SRCDIR)/patches/llvm-libunwind-ios-public-dyld-api.patch
+	echo 1 > $@
+
 checksum-llvmunwind: $(SRCCACHE)/llvmunwind-$(LLVMUNWIND_VER).tar.xz
 	$(JLCHECKSUM) $<
 
-$(BUILDDIR)/llvmunwind-$(LLVMUNWIND_VER)/build-configured: $(SRCCACHE)/llvmunwind-$(LLVMUNWIND_VER)/source-extracted $(SRCCACHE)/llvmunwind-$(LLVMUNWIND_VER)/llvm-libunwind-freebsd-libgcc-api-compat.patch-applied
+$(BUILDDIR)/llvmunwind-$(LLVMUNWIND_VER)/build-configured: $(SRCCACHE)/llvmunwind-$(LLVMUNWIND_VER)/source-extracted $(SRCCACHE)/llvmunwind-$(LLVMUNWIND_VER)/llvm-libunwind-ios-public-dyld-api.patch-applied
 	mkdir -p $(dir $@)
 	cd $(dir $@) && \
 	$(CMAKE) $(dir $<) $(LLVMUNWIND_OPTS)
