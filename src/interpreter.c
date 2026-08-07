@@ -354,9 +354,39 @@ static jl_value_t *eval_value(jl_value_t *e, interpreter_state *s)
         return eval_methoddef(ex, s);
     }
     else if (head == jl_foreigncall_sym) {
-        jl_error("`ccall` requires the compiler");
+        // Only builds that cannot generate code at runtime perform the call
+        // here; everywhere else this stays exactly as it was, including
+        // raising before any argument is evaluated.
+        if (!jl_foreigncall_interpretable())
+            jl_error("`ccall` requires the compiler");
+        // (fptr, rt, at, nreq, (cc, effects), args...) — see jl_resolve_globals
+        // in method.c, which has already evaluated rt and at to types.
+        if (nargs < 5)
+            jl_error("ccall: malformed foreigncall expression");
+        jl_value_t *rt = args[1];
+        jl_value_t *at = args[2];
+        size_t nreq = jl_unbox_long(args[3]);
+        jl_value_t *jlcc = jl_is_quotenode(args[4]) ? jl_quotenode_value(args[4]) : args[4];
+        jl_sym_t *cc = jl_is_tuple(jlcc) ? (jl_sym_t*)jl_get_nth_field_noalloc(jlcc, 0)
+                                         : (jl_sym_t*)jlcc;
+        size_t nccallargs = jl_is_svec(at) ? jl_svec_len(at) : 0;
+        jl_value_t **argv;
+        // One extra slot for the callee expression, which may need evaluating
+        // (a runtime pointer) rather than being a literal symbol.
+        JL_GC_PUSHARGS(argv, nccallargs + 1);
+        argv[0] = NULL;
+        if (!jl_is_quotenode(args[0]))
+            argv[0] = eval_value(args[0], s);
+        for (size_t i = 0; i < nccallargs; i++)
+            argv[i + 1] = eval_value(args[5 + i], s);
+        jl_value_t *v = jl_interpret_foreigncall(args[0], argv[0], rt, (jl_svec_t*)at,
+                                                 nreq, cc, argv + 1, nccallargs);
+        JL_GC_POP();
+        return v;
     }
     else if (head == jl_cfunction_sym) {
+        // Unlike `ccall`, this direction needs a code address that C can call,
+        // which cannot be produced without generating code.
         jl_error("`cfunction` requires the compiler");
     }
     jl_errorf("unsupported or misplaced expression %s", jl_symbol_name(head));
