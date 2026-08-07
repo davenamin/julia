@@ -352,7 +352,7 @@ JL_DLLEXPORT jl_module_t *jl_base_relative_to(jl_module_t *m)
     return jl_top_module;
 }
 
-static void expr_attributes(jl_value_t *v, int *has_ccall, int *has_defs, int *has_opaque)
+static void expr_attributes(jl_value_t *v, int *has_ccall, int *has_cfunction, int *has_defs, int *has_opaque)
 {
     if (!jl_is_expr(v))
         return;
@@ -377,6 +377,7 @@ static void expr_attributes(jl_value_t *v, int *has_ccall, int *has_defs, int *h
     }
     else if (head == jl_cfunction_sym) {
         *has_ccall = 1;
+        *has_cfunction = 1;
         return;
     }
     else if (head == jl_foreigncall_sym) {
@@ -417,7 +418,7 @@ static void expr_attributes(jl_value_t *v, int *has_ccall, int *has_defs, int *h
     for (i = 0; i < jl_array_len(e->args); i++) {
         jl_value_t *a = jl_exprarg(e, i);
         if (jl_is_expr(a))
-            expr_attributes(a, has_ccall, has_defs, has_opaque);
+            expr_attributes(a, has_ccall, has_cfunction, has_defs, has_opaque);
     }
 }
 
@@ -426,19 +427,28 @@ int jl_code_requires_compiler(jl_code_info_t *src, int include_force_compile)
     jl_array_t *body = src->code;
     assert(jl_typetagis(body, jl_array_any_type));
     size_t i;
-    int has_ccall = 0, has_defs = 0, has_opaque = 0;
+    int has_ccall = 0, has_cfunction = 0, has_defs = 0, has_opaque = 0;
     if (include_force_compile && jl_has_meta(body, jl_force_compile_sym))
         return 1;
     for(i=0; i < jl_array_len(body); i++) {
         jl_value_t *stmt = jl_array_ptr_ref(body,i);
-        expr_attributes(stmt, &has_ccall, &has_defs, &has_opaque);
-        if (has_ccall)
+        expr_attributes(stmt, &has_ccall, &has_cfunction, &has_defs, &has_opaque);
+        // `@cfunction` needs a code address and so always requires codegen.  A
+        // plain `ccall` does not, on builds whose interpreter can perform one
+        // (see src/interpreter-ccall.c); there, let the caller's usual
+        // compile_enabled checks decide instead of forcing compilation here.
+        if (has_cfunction)
             return 1;
+        if (has_ccall) {
+            if (!jl_foreigncall_interpretable())
+                return 1;
+            has_ccall = 0;   // keep scanning: a later statement may be a cfunction
+        }
     }
     return 0;
 }
 
-static void body_attributes(jl_array_t *body, int *has_ccall, int *has_defs, int *has_loops, int *has_opaque, int *forced_compile)
+static void body_attributes(jl_array_t *body, int *has_ccall, int *has_cfunction, int *has_defs, int *has_loops, int *has_opaque, int *forced_compile)
 {
     size_t i;
     *has_loops = 0;
@@ -454,7 +464,7 @@ static void body_attributes(jl_array_t *body, int *has_ccall, int *has_defs, int
                     *has_loops = 1;
             }
         }
-        expr_attributes(stmt, has_ccall, has_defs, has_opaque);
+        expr_attributes(stmt, has_ccall, has_cfunction, has_defs, has_opaque);
     }
     *forced_compile = jl_has_meta(body, jl_force_compile_sym);
 }
@@ -895,16 +905,19 @@ jl_value_t *jl_toplevel_eval_flex(jl_module_t *JL_NONNULL m, jl_value_t *e, int 
         return (jl_value_t*)ex;
     }
 
-    int has_ccall = 0, has_defs = 0, has_loops = 0, has_opaque = 0, forced_compile = 0;
+    int has_ccall = 0, has_cfunction = 0, has_defs = 0, has_loops = 0, has_opaque = 0, forced_compile = 0;
     assert(head == jl_thunk_sym);
     thk = (jl_code_info_t*)jl_exprarg(ex, 0);
     if (!jl_is_code_info(thk) || !jl_typetagis(thk->code, jl_array_any_type)) {
         jl_eval_errorf(m, "malformed \"thunk\" statement");
     }
-    body_attributes((jl_array_t*)thk->code, &has_ccall, &has_defs, &has_loops, &has_opaque, &forced_compile);
+    body_attributes((jl_array_t*)thk->code, &has_ccall, &has_cfunction, &has_defs, &has_loops, &has_opaque, &forced_compile);
 
     jl_value_t *result;
-    if (has_ccall ||
+    // As in jl_code_requires_compiler: `@cfunction` forces codegen, and so does
+    // a `ccall` unless this build's interpreter can perform one.
+    int needs_codegen = has_cfunction || (has_ccall && !jl_foreigncall_interpretable());
+    if (needs_codegen ||
             ((forced_compile || (!has_defs && fast && has_loops)) &&
             jl_options.compile_enabled != JL_OPTIONS_COMPILE_OFF &&
             jl_options.compile_enabled != JL_OPTIONS_COMPILE_MIN &&
@@ -928,7 +941,14 @@ jl_value_t *jl_toplevel_eval_flex(jl_module_t *JL_NONNULL m, jl_value_t *e, int 
     else {
         // use interpreter
         assert(thk);
-        if (has_opaque) {
+        // A `:foreigncall` carries its return and argument types as unevaluated
+        // expressions until `jl_resolve_globals_in_ir` replaces them with the
+        // type and the svec.  Method bodies get that at definition time, but a
+        // top-level thunk only gets it on the codegen path above — which every
+        // thunk containing a `ccall` used to take.  Now that the interpreter can
+        // perform one, resolve here too, or it is handed `Expr(:call, Core.svec,
+        // ...)` where an svec belongs.
+        if (has_opaque || (has_ccall && jl_foreigncall_interpretable())) {
             jl_resolve_globals_in_ir((jl_array_t*)thk->code, m, NULL, 0);
         }
         result = jl_interpret_toplevel_thunk(m, thk);

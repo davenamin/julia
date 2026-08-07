@@ -43,7 +43,12 @@ DEP_LIBS += blastrampoline
 endif
 
 ifeq ($(USE_SYSTEM_CSL), 0)
+# No GCC support libraries on iOS (see CompilerSupportLibraries_jll) — and
+# csl.mk copies *host* macOS dylibs from $(FC)'s search path, which must
+# never end up bundled into the iOS framework.
+ifneq ($(IOS), 1)
 DEP_LIBS += csl
+endif
 endif
 
 ifeq ($(SANITIZE), 1)
@@ -151,6 +156,13 @@ ifeq ($(USE_SYSTEM_UTF8PROC), 0)
 DEP_LIBS += utf8proc
 endif
 
+# iOS only: the interpreter makes foreign calls through libffi, because a
+# device cannot generate the code the compiler would otherwise emit.  Every
+# other platform reaches ccall through codegen and never links this.
+ifeq ($(IOS), 1)
+DEP_LIBS += libffi
+endif
+
 ifeq ($(USE_SYSTEM_ZLIB), 0)
 DEP_LIBS += zlib
 endif
@@ -192,7 +204,7 @@ DEP_LIBS_STAGED := $(DEP_LIBS)
 DEP_LIBS_STAGED_ALL := llvm llvm-tools clang llvmunwind unwind libuv pcre \
 	openlibm dsfmt blastrampoline openblas lapack gmp mpfr patchelf utf8proc \
 	objconv mbedtls libssh2 nghttp2 curl libgit2 libwhich zlib p7zip csl \
-	sanitizers libsuitesparse lld libtracyclient ittapi JuliaSyntax
+	sanitizers libsuitesparse lld libtracyclient ittapi JuliaSyntax libffi
 DEP_LIBS_ALL := $(DEP_LIBS_STAGED_ALL)
 
 ifneq ($(USE_BINARYBUILDER_OPENBLAS),0)
@@ -238,6 +250,7 @@ include $(SRCDIR)/objconv.mk
 include $(SRCDIR)/blastrampoline.mk
 include $(SRCDIR)/openblas.mk
 include $(SRCDIR)/utf8proc.mk
+include $(SRCDIR)/libffi.mk
 include $(SRCDIR)/libsuitesparse.mk
 include $(SRCDIR)/zlib.mk
 include $(SRCDIR)/unwind.mk
