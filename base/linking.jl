@@ -121,7 +121,18 @@ function ld()
     elseif Sys.isapple()
         flavor = "darwin"
         arch = Sys.ARCH == :aarch64 ? :arm64 : Sys.ARCH
-        default_args = `-arch $arch -undefined dynamic_lookup -platform_version macos $(Base.MACOS_PRODUCT_VERSION) $(Base.MACOS_PLATFORM_VERSION)`
+        # `-no_data_const` keeps read-only data in `__DATA` instead of migrating
+        # it to a `__DATA_CONST` segment.  LLD 15 — the version bundled here —
+        # performs that migration by default for a dylib whose minimum OS is
+        # macOS 10.15 or later, but never sets the `SG_READ_ONLY` segment flag
+        # that goes with it; the flag was not implemented until LLVM 16.  The
+        # minimum OS recorded below is the *build machine's* macOS version, so
+        # on a recent host dyld enforces the flag and refuses to load every
+        # pkgimage:
+        #     dlopen(...): '(__DATA_CONST segment missing SG_READ_ONLY flag)'
+        # Not producing the segment at all sidesteps the check.  Drop this once
+        # the bundled LLD is 16 or newer.
+        default_args = `-arch $arch -undefined dynamic_lookup -no_data_const -platform_version macos $(Base.MACOS_PRODUCT_VERSION) $(Base.MACOS_PLATFORM_VERSION)`
     else
         flavor = "gnu"
     end
