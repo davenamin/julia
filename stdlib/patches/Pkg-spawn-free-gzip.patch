@@ -1,0 +1,491 @@
+--- a/Project.toml
++++ b/Project.toml
+@@ -23,6 +23,7 @@
+ TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
+ Tar = "a4e569a6-e804-4fa4-b0f3-eef7a1d5b13e"
+ UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
++Zlib_jll = "83775a58-1f1d-513f-b197-d71354ab007a"
+ p7zip_jll = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
+ 
+ [weakdeps]
+--- a/src/PlatformEngines.jl
++++ b/src/PlatformEngines.jl
+@@ -7,7 +7,7 @@
+ using SHA, Downloads, Tar
+ import ...Pkg: Pkg, TOML, pkg_server, depots1, can_fancyprint, stderr_f
+ using ..MiniProgressBars
+-using Base.BinaryPlatforms, p7zip_jll
++using Base.BinaryPlatforms, p7zip_jll, Zlib_jll
+ 
+ export verify, unpack, package, download_verify_unpack
+ 
+@@ -40,6 +40,370 @@
+     error("7z binary not found")
+ end
+ 
++# Whether Pkg may run the bundled `7z` executable.
++#
++# iOS forbids fork/exec for third-party apps: every `run` / `open(::Cmd)` fails
++# with EPERM, there is no shell, and there is no way to install one.  Every
++# archive operation below therefore has a second implementation that
++# decompresses in this process (see `GzipInflateStream`), and the choice is
++# made up front from the platform rather than by catching the spawn failure —
++# an EPERM from a genuinely broken `7z` on a machine that *can* spawn should
++# still surface as the spawn error it is.
++#
++# Setting `JULIA_PKG_NO_SUBPROCESS=1` forces the spawn-free path anywhere,
++# which is how it gets exercised on a desktop machine.
++function can_spawn_7z()
++    Base.get_bool_env("JULIA_PKG_NO_SUBPROCESS", false) === true && return false
++    return !Base.IOS
++end
++
++## In-process gzip decompression ############################################
++#
++# `unpack`, `download_verify_unpack` and `verify_archive_tree_hash` all
++# decompress by piping a tarball through the `7z` executable and handing the
++# resulting stream to `Tar`, which only ever wants an `IO`.  `GzipInflateStream`
++# is that `IO`, produced by zlib inside this process.
++#
++# Which libz: `Zlib_jll`'s.  It is a Julia stdlib whose stub is compiled into
++# this build (not a downloaded artifact), it is already loaded into every
++# sysimage as a dependency of `LibCURL_jll`, and its `__init__` has opened
++# `libz_handle` before anything here runs — including on iOS, where the dlopen
++# name `@rpath/libz.1.dylib` is mapped to `libz.framework/libz` by the loader
++# fallback in src/dlload.c.  A system libz would work on Darwin but not
++# elsewhere, and would be a second copy of a library already shipped.
++#
++# The entry points are resolved with `dlsym` and called through the resulting
++# pointers instead of `ccall((:inflate, libz), ...)`: only the pointer is then
++# late-bound, so the calls themselves compile into the sysimage on the build
++# host and need no codegen on a device that has no JIT.  Each `ccall` also
++# lives in its own method with a fully concrete signature so that
++# `--compile=all` emits it (see `jl_compile_all_defs`).
++
++const Z_OK            = Cint(0)
++const Z_STREAM_END    = Cint(1)
++const Z_BUF_ERROR     = Cint(-5)
++const Z_VERSION_ERROR = Cint(-6)
++const Z_NO_FLUSH      = Cint(0)
++
++# inflateInit2's windowBits: 15 (largest window) + 16 (input carries a gzip
++# wrapper rather than a zlib one).  See the zlib manual.
++const Z_GZIP_WINDOW_BITS = Cint(15 + 16)
++
++# 128 KiB in and out.  Big enough that a package tarball is a few hundred
++# `inflate` calls, small enough to be irrelevant next to the extracted files.
++const Z_BUFSIZE = 128 * 1024
++
++"""
++    ZStream
++
++zlib's `z_stream`.  Field order and types mirror zlib.h; the layout is checked
++at runtime by passing `sizeof(ZStream)` to `inflateInit2_`, which answers
++`Z_VERSION_ERROR` when it disagrees with the library's own `sizeof(z_stream)`.
++"""
++mutable struct ZStream
++    next_in::Ptr{UInt8}
++    avail_in::Cuint
++    total_in::Culong
++    next_out::Ptr{UInt8}
++    avail_out::Cuint
++    total_out::Culong
++    msg::Ptr{UInt8}
++    state::Ptr{Cvoid}
++    zalloc::Ptr{Cvoid}
++    zfree::Ptr{Cvoid}
++    opaque::Ptr{Cvoid}
++    data_type::Cint
++    adler::Culong
++    reserved::Culong
++
++    ZStream() = new(C_NULL, 0, 0, C_NULL, 0, 0,
++                    C_NULL, C_NULL, C_NULL, C_NULL, C_NULL, 0, 0, 0)
++end
++
++struct ZlibEntryPoints
++    inflateInit2_::Ptr{Cvoid}
++    inflate::Ptr{Cvoid}
++    inflateReset::Ptr{Cvoid}
++    inflateEnd::Ptr{Cvoid}
++    zlibVersion::Ptr{Cvoid}
++end
++
++function zlib_entry_points()
++    handle = Zlib_jll.libz_handle
++    handle == C_NULL && error("Zlib_jll is not initialized; cannot decompress in-process")
++    dlsym = Base.Libc.Libdl.dlsym
++    return ZlibEntryPoints(dlsym(handle, :inflateInit2_),
++                           dlsym(handle, :inflate),
++                           dlsym(handle, :inflateReset),
++                           dlsym(handle, :inflateEnd),
++                           dlsym(handle, :zlibVersion))
++end
++
++z_version(fp::Ptr{Cvoid}) = ccall(fp, Ptr{UInt8}, ())
++z_inflate_init2(fp::Ptr{Cvoid}, strm::Ptr{Cvoid}, window_bits::Cint,
++                version::Ptr{UInt8}, stream_size::Cint) =
++    ccall(fp, Cint, (Ptr{Cvoid}, Cint, Ptr{UInt8}, Cint),
++          strm, window_bits, version, stream_size)
++z_inflate(fp::Ptr{Cvoid}, strm::Ptr{Cvoid}, flush::Cint) =
++    ccall(fp, Cint, (Ptr{Cvoid}, Cint), strm, flush)
++z_inflate_reset(fp::Ptr{Cvoid}, strm::Ptr{Cvoid}) =
++    ccall(fp, Cint, (Ptr{Cvoid},), strm)
++z_inflate_end(fp::Ptr{Cvoid}, strm::Ptr{Cvoid}) =
++    ccall(fp, Cint, (Ptr{Cvoid},), strm)
++
++"""
++    GzipInflateStream(source::IO) <: IO
++
++Read-only, non-seekable `IO` yielding the decompressed contents of the
++gzip-compressed `source`.  Concatenated gzip members are decompressed in
++sequence, as `gzip -dc` and `7z x -so` do.
++
++Only the operations `Tar` performs are provided: `eof`, `read(::Type{UInt8})`,
++`unsafe_read`, `readbytes!`, `readavailable`, `bytesavailable`, `skip` forwards
++and `close`.  `position` is deliberately left undefined, matching the process
++pipe this replaces — `Tar.read_tarball` probes for it with `applicable`.
++"""
++mutable struct GzipInflateStream <: IO
++    source::IO
++    zlib::ZlibEntryPoints
++    stream::ZStream
++    inbuf::Vector{UInt8}
++    ipos::Int              # index of the next unconsumed byte of `inbuf`
++    iend::Int              # index of the last valid byte of `inbuf`
++    outbuf::Vector{UInt8}
++    opos::Int              # index of the next unread byte of `outbuf`
++    oend::Int              # index of the last valid byte of `outbuf`
++    inflating::Bool        # inflateInit2_ succeeded; inflateEnd still owed
++    finished::Bool         # last member ended; no further output
++    name::String
++end
++
++function GzipInflateStream(source::IO; name::AbstractString = "<gzip stream>")
++    zlib = zlib_entry_points()
++    stream = ZStream()
++    s = GzipInflateStream(source, zlib, stream,
++                          Vector{UInt8}(undef, Z_BUFSIZE), 1, 0,
++                          Vector{UInt8}(undef, Z_BUFSIZE), 1, 0,
++                          false, false, String(name))
++    ret = GC.@preserve stream z_inflate_init2(zlib.inflateInit2_,
++                                              pointer_from_objref(stream),
++                                              Z_GZIP_WINDOW_BITS,
++                                              z_version(zlib.zlibVersion),
++                                              Cint(sizeof(ZStream)))
++    if ret == Z_VERSION_ERROR
++        error("zlib rejected our z_stream: this build's `ZStream` " *
++              "($(sizeof(ZStream)) bytes) does not match the loaded libz")
++    elseif ret != Z_OK
++        throw(zlib_error(s, ret, "inflateInit2"))
++    end
++    s.inflating = true
++    finalizer(finalize_inflate, s)
++    return s
++end
++
++function zlib_error(s::GzipInflateStream, ret::Cint, what::AbstractString)
++    detail = s.stream.msg == C_NULL ? "" : ": " * unsafe_string(s.stream.msg)
++    return ErrorException("$what failed while decompressing $(s.name) " *
++                          "(zlib code $ret)$detail")
++end
++
++function end_inflate!(s::GzipInflateStream)
++    if s.inflating
++        s.inflating = false
++        stream = s.stream
++        GC.@preserve stream z_inflate_end(s.zlib.inflateEnd,
++                                          pointer_from_objref(stream))
++    end
++    return nothing
++end
++
++# Named (rather than a closure) so `--compile=all` gives it a concrete
++# specialization: a finalizer that needs the compiler would be fatal on a
++# device that has none.
++finalize_inflate(s::GzipInflateStream) = end_inflate!(s)
++
++# Refill `inbuf` from the source.  Returns false at end of the source.
++function fill_input!(s::GzipInflateStream)
++    s.ipos <= s.iend && return true
++    n = readbytes!(s.source, s.inbuf, length(s.inbuf))
++    s.ipos = 1
++    s.iend = n
++    return n > 0
++end
++
++# A `.tar.gz` may be several concatenated gzip members.  After a member's
++# trailer, look for another member's magic; anything else — NUL padding to a
++# block boundary, end of file — ends the stream, which is what gzip(1) does.
++# Returns true when `inflate` was reset to start on a new member.
++function start_next_member!(s::GzipInflateStream)
++    if s.iend - s.ipos + 1 < 2
++        # Carry over the odd leftover byte and top up to the two the magic
++        # needs, one byte at a time — this runs at most once per member.
++        rest = s.iend - s.ipos + 1
++        rest == 1 && (s.inbuf[1] = s.inbuf[s.ipos])
++        s.ipos = 1
++        s.iend = rest
++        while s.iend < 2
++            eof(s.source) && return false
++            s.iend += 1
++            s.inbuf[s.iend] = read(s.source, UInt8)
++        end
++    end
++    (s.inbuf[s.ipos] == 0x1f && s.inbuf[s.ipos + 1] == 0x8b) || return false
++    stream = s.stream
++    ret = GC.@preserve stream z_inflate_reset(s.zlib.inflateReset,
++                                              pointer_from_objref(stream))
++    ret == Z_OK || throw(zlib_error(s, ret, "inflateReset"))
++    return true
++end
++
++# Make at least one decompressed byte available, returning how many are.
++# Zero means the stream is exhausted.
++function fill_output!(s::GzipInflateStream)
++    s.opos <= s.oend && return s.oend - s.opos + 1
++    s.finished && return 0
++    stream = s.stream
++    while true
++        if s.ipos > s.iend && !fill_input!(s)
++            # zlib never reported the gzip trailer, so this is a truncated
++            # archive rather than a clean end of stream.
++            throw(EOFError())
++        end
++        inbuf, outbuf = s.inbuf, s.outbuf
++        ret, produced = GC.@preserve inbuf outbuf stream begin
++            stream.next_in = pointer(inbuf, s.ipos)
++            stream.avail_in = Cuint(s.iend - s.ipos + 1)
++            stream.next_out = pointer(outbuf)
++            stream.avail_out = Cuint(length(outbuf))
++            r = z_inflate(s.zlib.inflate, pointer_from_objref(stream), Z_NO_FLUSH)
++            s.ipos = s.iend + 1 - Int(stream.avail_in)
++            (r, length(outbuf) - Int(stream.avail_out))
++        end
++        if ret == Z_STREAM_END
++            s.finished = !start_next_member!(s)
++        elseif ret == Z_BUF_ERROR
++            # zlib returns this when it could make no progress at all.  Output
++            # space was never the constraint here, so it means "need more
++            # input" — unless input was available too, which is corruption.
++            produced == 0 && s.ipos <= s.iend && throw(zlib_error(s, ret, "inflate"))
++        elseif ret != Z_OK
++            throw(zlib_error(s, ret, "inflate"))
++        end
++        if produced > 0
++            s.opos = 1
++            s.oend = produced
++            return produced
++        end
++        s.finished && return 0
++    end
++end
++
++Base.eof(s::GzipInflateStream) = fill_output!(s) == 0
++Base.isopen(s::GzipInflateStream) = s.inflating
++Base.isreadable(s::GzipInflateStream) = s.inflating
++Base.iswritable(::GzipInflateStream) = false
++
++function Base.bytesavailable(s::GzipInflateStream)
++    return s.opos <= s.oend ? s.oend - s.opos + 1 : 0
++end
++
++function Base.read(s::GzipInflateStream, ::Type{UInt8})
++    fill_output!(s) == 0 && throw(EOFError())
++    byte = s.outbuf[s.opos]
++    s.opos += 1
++    return byte
++end
++
++function Base.unsafe_read(s::GzipInflateStream, p::Ptr{UInt8}, n::UInt)
++    remaining = Int(n)
++    while remaining > 0
++        avail = fill_output!(s)
++        avail == 0 && throw(EOFError())
++        take = min(avail, remaining)
++        GC.@preserve s unsafe_copyto!(p, pointer(s.outbuf, s.opos), take)
++        s.opos += take
++        p += take
++        remaining -= take
++    end
++    return nothing
++end
++
++function Base.readbytes!(s::GzipInflateStream, b::AbstractVector{UInt8},
++                         nb::Integer = length(b))
++    Base.require_one_based_indexing(b)
++    nb = Int(nb)
++    olb = lb = length(b)
++    nread = 0
++    while nread < nb
++        avail = fill_output!(s)
++        avail == 0 && break
++        take = min(avail, nb - nread)
++        if nread + take > lb
++            # Grow progressively, as the generic method does — `read(io)`
++            # calls this with `nb == typemax(Int)` and a 1 KiB buffer, so
++            # sizing up to `nb` in one go would ask for the whole address
++            # space.
++            lb = min(nb, max(nread + take, 2 * lb))
++            resize!(b, lb)
++        end
++        copyto!(b, nread + 1, s.outbuf, s.opos, take)
++        s.opos += take
++        nread += take
++    end
++    # Same contract as the generic method: shrink back to what was actually
++    # read, but only if we grew `b` in the first place.
++    lb > olb && resize!(b, nread)
++    return nread
++end
++
++function Base.readavailable(s::GzipInflateStream)
++    avail = fill_output!(s)
++    avail == 0 && return UInt8[]
++    bytes = s.outbuf[s.opos:(s.opos + avail - 1)]
++    s.opos += avail
++    return bytes
++end
++
++function Base.skip(s::GzipInflateStream, n::Integer)
++    n < 0 && throw(ArgumentError("cannot skip backwards in a gzip stream"))
++    remaining = Int(n)
++    while remaining > 0
++        avail = fill_output!(s)
++        avail == 0 && throw(EOFError())
++        take = min(avail, remaining)
++        s.opos += take
++        remaining -= take
++    end
++    return s
++end
++
++function Base.close(s::GzipInflateStream)
++    end_inflate!(s)
++    s.finished = true
++    s.opos, s.oend = 1, 0
++    return nothing
++end
++
++"""
++    open_gzip_tarball(f, tarball_path)
++
++Call `f(io)` with `io` streaming the decompressed contents of the
++gzip-compressed `tarball_path`.  The spawn-free stand-in for
++``open(f, `\$(exe7z()) x \$tarball_path -so`)``.
++"""
++function open_gzip_tarball(f, tarball_path::AbstractString)
++    return open(tarball_path, "r") do file
++        stream = GzipInflateStream(file; name = String(tarball_path))
++        try
++            return f(stream)
++        finally
++            close(stream)
++        end
++    end
++end
++
++#############################################################################
++
+ is_secure_url(url::AbstractString) =
+     occursin(r"^(https://|\w+://(127\.0\.0\.1|localhost)(:\d+)?($|/))"i, url)
+ 
+@@ -413,7 +777,12 @@
+         dest::AbstractString;
+         verbose::Bool = false,
+     )
+-    return Tar.extract(`$(exe7z()) x $tarball_path -so`, dest, copy_symlinks = copy_symlinks())
++    if can_spawn_7z()
++        return Tar.extract(`$(exe7z()) x $tarball_path -so`, dest, copy_symlinks = copy_symlinks())
++    end
++    return open_gzip_tarball(tarball_path) do io
++        Tar.extract(io, dest, copy_symlinks = copy_symlinks())
++    end
+ end
+ 
+ """
+@@ -422,6 +791,16 @@
+ Compress `src_dir` into a tarball located at `tarball_path`.
+ """
+ function package(src_dir::AbstractString, tarball_path::AbstractString; io = stderr_f())
++    # Compression is the one direction with no in-process implementation: the
++    # only caller is archive *creation*, which nothing on a device does, and a
++    # deflate binding would double this file's zlib surface to serve it.
++    can_spawn_7z() || error(
++        """
++        Pkg cannot create compressed archives on this platform: it compresses by \
++        piping through the bundled `7z` executable, which cannot be spawned here, \
++        and no in-process deflate is built in.  Reading archives (`unpack`, \
++        tree-hash verification) is supported."""
++    )
+     rm(tarball_path, force = true)
+     cmd = `$(exe7z()) a -si -tgzip -mx9 $tarball_path`
+     return open(pipeline(cmd, stdout = devnull, stderr = io), write = true) do io
+@@ -543,8 +922,14 @@
+             @info("Unpacking $(tarball_path) into $(dest)...")
+         end
+         isnothing(progress) || progress(10000, 10000; status = "unpacking")
+-        open(`$(exe7z()) x $tarball_path -so`) do io
+-            Tar.extract(io, dest, copy_symlinks = copy_symlinks())
++        if can_spawn_7z()
++            open(`$(exe7z()) x $tarball_path -so`) do io
++                Tar.extract(io, dest, copy_symlinks = copy_symlinks())
++            end
++        else
++            open_gzip_tarball(tarball_path) do io
++                Tar.extract(io, dest, copy_symlinks = copy_symlinks())
++            end
+         end
+     finally
+         if remove_tarball
+@@ -695,7 +1080,11 @@
+     # tarball, tree hash verification requires that the file can i) be
+     # decompressed and ii) is a proper archive.
+     calc_hash = try
+-        Base.SHA1(open(Tar.tree_hash, `$(exe7z()) x $tar_gz -so`))
++        if can_spawn_7z()
++            Base.SHA1(open(Tar.tree_hash, `$(exe7z()) x $tar_gz -so`))
++        else
++            Base.SHA1(open_gzip_tarball(Tar.tree_hash, tar_gz))
++        end
+     catch err
+         @warn "unable to decompress and read archive" exception = err
+         return false
+--- a/src/Registry/Registry.jl
++++ b/src/Registry/Registry.jl
+@@ -3,7 +3,8 @@
+ import ..Pkg
+ using ..Pkg: depots, depots1, printpkgstyle, stderr_f, isdir_nothrow, pathrepr, pkg_server,
+     GitTools
+-using ..Pkg.PlatformEngines: download_verify_unpack, download, download_verify, exe7z, verify_archive_tree_hash
++using ..Pkg.PlatformEngines: download_verify_unpack, download, download_verify, exe7z, verify_archive_tree_hash,
++    can_spawn_7z, open_gzip_tarball
+ using UUIDs, LibGit2, TOML, Dates
+ import FileWatching
+ 
+--- a/src/Registry/registry_instance.jl
++++ b/src/Registry/registry_instance.jl
+@@ -285,11 +285,18 @@
+     data = Dict{String, String}()
+     buf = Vector{UInt8}(undef, Tar.DEFAULT_BUFFER_SIZE)
+     io = IOBuffer()
+-    open(`$(exe7z()) x $tar_gz -so`) do tar
+-        read_tarball_simple(x -> true, tar; buf = buf) do hdr
+-            Tar.read_data(tar, io; size = hdr.size, buf = buf)
+-            data[hdr.path] = String(take!(io))
+-        end
++    # Registries are stored compressed, so this runs before anything is
++    # installed -- a fully offline, read-only depot still reaches it.  Same
++    # split as PlatformEngines.unpack: pipe through `7z` where a process can be
++    # spawned, inflate in this process where it cannot.
++    read_registry = tar -> read_tarball_simple(x -> true, tar; buf = buf) do hdr
++        Tar.read_data(tar, io; size = hdr.size, buf = buf)
++        data[hdr.path] = String(take!(io))
++    end
++    if can_spawn_7z()
++        open(read_registry, `$(exe7z()) x $tar_gz -so`)
++    else
++        open_gzip_tarball(read_registry, tar_gz)
+     end
+     return data
+ end
