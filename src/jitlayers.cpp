@@ -180,6 +180,30 @@ static orc::ThreadSafeModule jl_get_globals_module(orc::ThreadSafeContext &ctx, 
     return GTSM;
 }
 
+// iOS devices forbid third-party processes from creating executable memory,
+// so any runtime codegen attempt ends in a jump into a non-executable JIT
+// page (EXC_BAD_ACCESS / KERN_PROTECTION_FAILURE).  Fail as a catchable
+// Julia error that names the offending method instead, so it can be
+// precompiled into the iOS sysimage (IOS_SYSIMAGE_EXTRA_JL /
+// IOS_SYSIMAGE_EXTRA_PROJECT).  The simulator runs under macOS rules where
+// the JIT works, so only device builds are gated.
+#if defined(_OS_IOS_) && defined(TARGET_OS_SIMULATOR) && !TARGET_OS_SIMULATOR
+#define JL_IOS_NO_CODEGEN 1
+static void jl_ios_codegen_unavailable(jl_method_instance_t *mi)
+{
+    if (mi != NULL && jl_is_method(mi->def.method)) {
+        jl_method_t *def = mi->def.method;
+        jl_errorf("code generation is not available on iOS devices: "
+                  "tried to compile %s.%s -- precompile it into the iOS "
+                  "sysimage or avoid constructs that require native code "
+                  "(e.g. @cfunction)",
+                  jl_symbol_name(def->module->name), jl_symbol_name(def->name));
+    }
+    jl_error("code generation is not available on iOS devices -- "
+             "precompile the required methods into the iOS sysimage");
+}
+#endif
+
 // this generates llvm code for the lambda info
 // and adds the result to the jitlayers
 // (and the shadow module),
@@ -467,6 +491,9 @@ jl_code_instance_t *jl_generate_fptr_impl(jl_method_instance_t *mi JL_PROPAGATES
 {
     if (did_compile != NULL)
         *did_compile = 0;
+#ifdef JL_IOS_NO_CODEGEN
+    jl_ios_codegen_unavailable(mi);
+#endif
     auto ct = jl_current_task;
     bool timed = (ct->reentrant_timing & 1) == 0;
     if (timed)
@@ -555,6 +582,9 @@ void jl_generate_fptr_for_oc_wrapper_impl(jl_code_instance_t *oc_wrap)
     if (jl_atomic_load_relaxed(&oc_wrap->invoke) != NULL) {
         return;
     }
+#ifdef JL_IOS_NO_CODEGEN
+    jl_ios_codegen_unavailable(oc_wrap->def);
+#endif
     JL_LOCK(&jl_codegen_lock);
     if (jl_atomic_load_relaxed(&oc_wrap->invoke) == NULL) {
         _jl_compile_codeinst(oc_wrap, NULL, 1, *jl_ExecutionEngine->getContext(), 0);
@@ -568,6 +598,9 @@ void jl_generate_fptr_for_unspecialized_impl(jl_code_instance_t *unspec)
     if (jl_atomic_load_relaxed(&unspec->invoke) != NULL) {
         return;
     }
+#ifdef JL_IOS_NO_CODEGEN
+    jl_ios_codegen_unavailable(unspec->def);
+#endif
     auto ct = jl_current_task;
     bool timed = (ct->reentrant_timing & 1) == 0;
     if (timed)
