@@ -26,7 +26,12 @@ name: iOS port
 #
 #   deps/srccache        Upstream tarballs.  The same key in every job -- they
 #                        fetch the same files, and an iOS build downloads a
-#                        superset of what a host build does.  Spelled out at
+#                        superset of what a host build does.  The `v2` salt
+#                        discards caches written before jldownload learned to
+#                        delete a partial transfer: a truncated tarball in
+#                        srccache is sticky, because the download rule only
+#                        fires when the file is absent, so it would fail its
+#                        checksum on every subsequent run.  Spelled out at
 #                        each use rather than hoisted into a workflow-level
 #                        `env`, where hashFiles() is not an allowed context
 #                        and silently yields a run with no jobs at all.
@@ -115,8 +120,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: deps/srccache
-          key: srccache-${{ hashFiles('deps/*.version', 'deps/checksums/**') }}
-          restore-keys: srccache-
+          key: srccache-v2-${{ hashFiles('deps/*.version', 'deps/checksums/**') }}
+          restore-keys: srccache-v2-
 
       - name: Toolchain
         run: |
@@ -215,8 +220,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: deps/srccache
-          key: srccache-${{ hashFiles('deps/*.version', 'deps/checksums/**') }}
-          restore-keys: srccache-
+          key: srccache-v2-${{ hashFiles('deps/*.version', 'deps/checksums/**') }}
+          restore-keys: srccache-v2-
 
       - name: Toolchain
         run: |
@@ -331,8 +336,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: deps/srccache
-          key: srccache-${{ hashFiles('deps/*.version', 'deps/checksums/**') }}
-          restore-keys: srccache-
+          key: srccache-v2-${{ hashFiles('deps/*.version', 'deps/checksums/**') }}
+          restore-keys: srccache-v2-
 
       - name: Toolchain
         run: |
