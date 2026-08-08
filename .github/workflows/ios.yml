@@ -114,16 +114,40 @@ jobs:
       #
       # It does NOT skip `stdlibs-cache-release`, deliberately: precompiling
       # every stdlib is what catches a JLL this fork has broken, which is how
-      # the p7zip_jll regression surfaced.  The cost is that REPL's workload
-      # is in that phase, and it is flaky here for reasons unrelated to iOS --
-      # it drives a fake PTY and greps the transcript for "ERROR:" against a
-      # substring allow-list (stdlib/REPL/src/precompile.jl), so a raced or
-      # wrapped read of an intentionally-triggered error reads as a real one.
-      # A bare `ERROR: BoundsError`, with the allow-listed
-      # ": attempt to access 0-element Vector{Any} at index [1]" suffix
-      # missing, is that failure and not a port bug.
+      # the p7zip_jll regression surfaced.
+      #
+      # The cost of keeping that phase is REPL's precompile workload, which is
+      # flaky here for reasons unrelated to iOS.  It drives a fake PTY, types
+      # expressions that raise on purpose, and greps the transcript for
+      # "ERROR:" against a substring allow-list
+      # (stdlib/REPL/src/precompile.jl).  A short read truncates one of those
+      # deliberate errors past the point where the allow-list matches, and the
+      # workload calls exit(1).  Two runs here produced two different
+      # truncations -- `ERROR: BoundsError` and `ERROR: MethodError: ` -- both
+      # of them errors the workload itself scripts.
+      #
+      # So: retry, but only on that signature, and only a bounded number of
+      # times.  `make` is incremental and the other 107 configurations stay
+      # cached, so a retry re-runs the precompile phase in minutes rather than
+      # rebuilding.  Any other failure fails the job on the first attempt.
       - name: Build
-        run: make JULIA_PRECOMPILE=0 VERBOSE=1
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/build.log"
+          for attempt in 1 2 3; do
+              if make JULIA_PRECOMPILE=0 VERBOSE=1 2>&1 | tee "$log"; then
+                  [[ "$attempt" -gt 1 ]] && echo "::notice::build succeeded on attempt $attempt"
+                  exit 0
+              fi
+              if ! grep -q 'Failed to precompile REPL' "$log" \
+                 || ! grep -q 'Review REPL precompilation with debug_output on' "$log"; then
+                  echo "::error::build failed for a reason other than the known REPL PTY flake"
+                  exit 1
+              fi
+              echo "::warning::attempt $attempt hit the REPL fake-PTY transcript flake; retrying"
+          done
+          echo "::error::REPL precompilation failed 3 times -- no longer plausibly a flake"
+          exit 1
 
       - name: Version
         run: ./usr/bin/julia -e 'using InteractiveUtils; versioninfo()'
