@@ -111,6 +111,17 @@ jobs:
       # JULIA_PRECOMPILE=0 skips generate_precompile.jl, a large fraction of
       # the wall time that exercises nothing this fork changes.  The iOS bake
       # does not want it either: it runs its own --compile=all pass.
+      #
+      # It does NOT skip `stdlibs-cache-release`, deliberately: precompiling
+      # every stdlib is what catches a JLL this fork has broken, which is how
+      # the p7zip_jll regression surfaced.  The cost is that REPL's workload
+      # is in that phase, and it is flaky here for reasons unrelated to iOS --
+      # it drives a fake PTY and greps the transcript for "ERROR:" against a
+      # substring allow-list (stdlib/REPL/src/precompile.jl), so a raced or
+      # wrapped read of an intentionally-triggered error reads as a real one.
+      # A bare `ERROR: BoundsError`, with the allow-listed
+      # ": attempt to access 0-element Vector{Any} at index [1]" suffix
+      # missing, is that failure and not a port bug.
       - name: Build
         run: make JULIA_PRECOMPILE=0 VERBOSE=1
 
