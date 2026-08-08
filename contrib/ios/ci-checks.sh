@@ -109,6 +109,19 @@ else
     echo "$unguarded"
 fi
 
+# The simulator harness is compiled by CI against the framework, which needs
+# macOS; a syntax-only pass catches the ordinary mistakes anywhere.
+if command -v cc >/dev/null 2>&1; then
+    if out=$(cc -fsyntax-only -Wall -I contrib/ios contrib/ios/simulator-selftest.c 2>&1); then
+        pass "contrib/ios/simulator-selftest.c compiles"
+    else
+        fail "contrib/ios/simulator-selftest.c does not compile"
+        echo "$out" | sed 's/^/      /'
+    fi
+else
+    skip "simulator-selftest.c syntax check (no cc)"
+fi
+
 # ---------------------------------------------------------------------------
 section "fork-local patches apply to their pinned sources"
 

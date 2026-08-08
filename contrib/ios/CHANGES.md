@@ -11,10 +11,15 @@ library-path fix, an upstream bug that happens to bite hardest here; and
 `BLAS.forward_accelerate!` / `BLAS.report`, defined on every platform but
 only called automatically under `Base.IOS`.
 
-CI lives in `.github/workflows/ios.yml`, in three tiers: structural checks on
+CI lives in `.github/workflows/ios.yml`, in four tiers: structural checks on
 every push (`contrib/ios/ci-checks.sh`, also runnable locally and the thing to
-run first), a macOS host build, and the full cross-build behind a manual
-dispatch.  The checks tier exists mostly to catch a fork-local patch drifting
+run first), a macOS host build, and behind a manual dispatch both a simulator
+build that *runs* the port under `simctl spawn` and the device cross-build.
+The simulator tier is the only one that executes iOS-targeted code — the
+simulator defines `TARGET_OS_IPHONE`, so the libffi ccall interpreter, the
+sysctl CPU detection and the framework `dlopen` fallback are all live there.
+It cannot show anything caused by a device *restriction* rather than by iOS
+code: the JIT works, `fork`/`exec` succeed and the bundle is writable.  The checks tier exists mostly to catch a fork-local patch drifting
 off the revision it is pinned to, which otherwise surfaces an hour into a
 build.
 

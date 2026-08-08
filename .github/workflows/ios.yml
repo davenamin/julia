@@ -10,11 +10,22 @@ name: iOS port
 #                C/C++ this fork touches and exercises both stdlib patches,
 #                because the external-stdlib patch step is not iOS-gated.
 #                Then runs the two host-runnable iOS tests.
-#   ios-build    hours, macOS, manual only.  The real cross-build.
+#   ios-sim      hours, macOS, manual only.  Builds the simulator slice and
+#                *runs* it under `simctl spawn`.  The only tier that executes
+#                the port rather than compiling it.
+#   ios-build    hours, macOS, manual only.  The device cross-build, which is
+#                the artifact an app ships but cannot be run here.
 #
 # What host-build cannot cover, because it is all behind _OS_IOS_ or IOS=1:
 # src/processor_arm.cpp's iOS _get_host_cpu, src/interpreter-ccall.c's body,
-# and the entire sysimage bake.  Only ios-build compiles those.
+# and the entire sysimage bake.  Both iOS tiers compile those; only ios-sim
+# runs them.
+#
+# The simulator defines TARGET_OS_IPHONE, so every genuinely iOS-only code
+# path is live there.  What it cannot show is anything caused by a device
+# *restriction* rather than by iOS code: the simulator runs under macOS
+# rules, so the JIT works (JL_IOS_NO_CODEGEN is device-only by construction),
+# fork/exec succeed, and the bundle is writable.  Those stay device-only.
 #
 # On ios-build's runtime: iOS forces USE_BINARYBUILDER=0 (Make.inc), so LLVM
 # and every other dependency is built from source, and then a host julia has
@@ -35,8 +46,12 @@ on:
         description: 'Run the macOS host build'
         type: boolean
         default: true
+      run_ios_sim:
+        description: 'Build and RUN the simulator slice (hours)'
+        type: boolean
+        default: false
       run_ios_build:
-        description: 'Run the full iOS cross-build (hours)'
+        description: 'Build the device slice (hours, cannot be run here)'
         type: boolean
         default: false
 
@@ -119,8 +134,97 @@ jobs:
       - name: sysimage-ios.mk expands
         run: contrib/ios/ci-checks.sh --offline
 
+  ios-sim:
+    name: iOS simulator build + run
+    needs: checks
+    if: github.event_name == 'workflow_dispatch' && inputs.run_ios_sim
+    runs-on: macos-15
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache dependency downloads
+        uses: actions/cache@v4
+        with:
+          path: deps/srccache
+          key: srccache-ios-${{ hashFiles('deps/*.version', 'deps/checksums/**') }}
+          restore-keys: srccache-ios-
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-path
+          xcrun simctl list runtimes
+          echo "NPROC=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+
+      # SLICES=iphonesimulator skips the device slice, which needs its own
+      # full dependency build and cannot be run here anyway.  The script also
+      # builds the host julia the bake stages need, and stages the runtime
+      # resources the embedder points JULIA_BINDIR / JULIA_DEPOT_PATH at.
+      - name: Build the simulator slice
+        env:
+          SLICES: iphonesimulator
+        run: contrib/ios/build-xcframework.sh "$PWD/ios-out"
+
+      - name: Sysimage is an iOS-simulator arm64 Mach-O
+        run: |
+          sys=build-ios-sim/usr/lib/julia/sys.dylib
+          file "$sys"
+          lipo -archs "$sys" | grep -qx arm64 || { echo "not arm64"; exit 1; }
+          vtool -show-build-version "$sys" | tee /tmp/vtool.txt
+          grep -qi 'platform.*simulator' /tmp/vtool.txt \
+            || { echo "sys.dylib is not built for the iOS simulator"; exit 1; }
+
+      # No app bundle and no Xcode project: `simctl spawn` runs a plain Mach-O
+      # built for the simulator platform, which is all the embedding API needs.
+      # julia_ios_init.c is compiled by the embedding app rather than shipped
+      # inside the framework, so the harness builds it here the same way an
+      # app target would.  16.4 matches Make.inc's IOS_VERSION_MIN default.
+      - name: Build the self-test harness
+        run: |
+          fw="$PWD/build-ios-sim/install/Frameworks"
+          xcrun --sdk iphonesimulator clang -arch arm64 -Wall \
+                -mios-simulator-version-min=16.4 \
+                -I contrib/ios -F "$fw" -framework Julia \
+                -Wl,-rpath,"$fw" \
+                contrib/ios/julia_ios_init.c \
+                contrib/ios/simulator-selftest.c -o "$PWD/selftest"
+          file "$PWD/selftest"
+
+      # Pick a device the runner image already pairs with an installed
+      # runtime, rather than creating one and hoping the pairing exists.
+      - name: Boot a simulator
+        run: |
+          udid=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['udid'] for r,v in d.items() if 'iOS' in r for x in v if x.get('isAvailable')))")
+          echo "using simulator $udid"
+          echo "SIM_UDID=$udid" >> "$GITHUB_ENV"
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+
+      # The payoff: iOS-targeted libjulia, an iOS-targeted sysimage, and every
+      # ccall in the self-test going through libffi in the interpreter.
+      - name: Run the self-test in the simulator
+        run: |
+          xcrun simctl spawn "$SIM_UDID" "$PWD/selftest" \
+                "$PWD/build-ios-sim/install/Frameworks" \
+                "$PWD/ios-out/julia-runtime-resources" \
+                "$RUNNER_TEMP/depot"
+
+      # Leave the runner's simulator as we found it; `delete` would remove a
+      # device from the image, so only shut down.
+      - name: Shut down the simulator
+        if: always()
+        run: xcrun simctl shutdown "${SIM_UDID:-booted}" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-simulator-output
+          path: ios-out
+          if-no-files-found: warn
+
   ios-build:
-    name: iOS cross-build
+    name: iOS device cross-build
     needs: checks
     if: github.event_name == 'workflow_dispatch' && inputs.run_ios_build
     runs-on: macos-15

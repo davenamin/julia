@@ -145,11 +145,12 @@ void julia_ios_enable_jit(void);
 // libblastrampoline has loaded, their integer interface, and which library
 // actually backs a representative spread of BLAS and LAPACK symbols.
 //
-// Worth calling once from a device build.  Julia gets its LAPACK on iOS from
-// Apple's Accelerate framework (the cross-built OpenBLAS has none — it is
-// compiled without a Fortran compiler), forwarded at startup on top of
-// OpenBLAS.  This is how you confirm that happened, and see which symbols
-// Accelerate covers versus which fall back.  A symbol reported UNBOUND aborts
+// Worth calling once from a device build.  Julia forwards Apple's Accelerate
+// on top of OpenBLAS at startup, so BLAS and LAPACK come from Accelerate
+// wherever it exports a symbol and from OpenBLAS otherwise (the cross-built
+// OpenBLAS is NOFORTRAN, which selects its C_LAPACK sources rather than
+// dropping LAPACK).  This is how you confirm the forward happened, and see
+// which symbols Accelerate covers versus which fall back.  A symbol reported UNBOUND aborts
 // the process if anything calls it.
 //
 // Must be called after julia_ios_init_with_paths().  Returns 0 on success,

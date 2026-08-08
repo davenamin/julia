@@ -109,6 +109,11 @@ FRAMEWORK_NAME="${FRAMEWORK_NAME:-Julia}"
 DEVICE_BUILDDIR="${DEVICE_BUILDDIR:-$JULIA_SRC/build-ios-device}"
 SIM_BUILDDIR="${SIM_BUILDDIR:-$JULIA_SRC/build-ios-sim}"
 REBUILD_SYSIMAGE="${REBUILD_SYSIMAGE:-}"
+# Which slices to build.  Both by default, because that is what an app
+# needs; a single slice is for iteration -- notably SLICES=iphonesimulator,
+# which is the only configuration that can actually be *run* without a
+# device.  A one-slice xcframework is valid, just not universal.
+SLICES="${SLICES:-iphoneos iphonesimulator}"
 OUTPUT_DIR="${1:-$JULIA_SRC/build-ios}"
 
 # xcodebuild's -debug-symbols requires absolute paths; normalize overrides.
@@ -191,15 +196,24 @@ build_slice() {
          framework
 }
 
-build_slice iphoneos        "$DEVICE_BUILDDIR"
-build_slice iphonesimulator "$SIM_BUILDDIR"
+slice_builddir() {
+    case "$1" in
+        iphoneos)        echo "$DEVICE_BUILDDIR" ;;
+        iphonesimulator) echo "$SIM_BUILDDIR" ;;
+        *) echo "ERROR: unknown slice '$1' (want iphoneos or iphonesimulator)" >&2
+           exit 1 ;;
+    esac
+}
 
-DEVICE_FWKS="$DEVICE_BUILDDIR/install/Frameworks"
-SIM_FWKS="$SIM_BUILDDIR/install/Frameworks"
-[[ -d "$DEVICE_FWKS/${FRAMEWORK_NAME}.framework" ]] || \
-    { echo "ERROR: device frameworks missing at $DEVICE_FWKS" >&2; exit 1; }
-[[ -d "$SIM_FWKS/${FRAMEWORK_NAME}.framework" ]] || \
-    { echo "ERROR: simulator frameworks missing at $SIM_FWKS" >&2; exit 1; }
+for slice in $SLICES; do
+    build_slice "$slice" "$(slice_builddir "$slice")"
+done
+
+for slice in $SLICES; do
+    fwks="$(slice_builddir "$slice")/install/Frameworks"
+    [[ -d "$fwks/${FRAMEWORK_NAME}.framework" ]] || \
+        { echo "ERROR: $slice frameworks missing at $fwks" >&2; exit 1; }
+done
 
 XCFW_DIR="$OUTPUT_DIR/xcframeworks"
 mkdir -p "$OUTPUT_DIR"
@@ -209,31 +223,32 @@ mkdir -p "$XCFW_DIR"
 # layouts don't linger next to the new output.
 rm -rf "$OUTPUT_DIR/${FRAMEWORK_NAME}.xcframework"
 
-DEVICE_DSYMS="$DEVICE_BUILDDIR/install/Frameworks-dSYMs"
-SIM_DSYMS="$SIM_BUILDDIR/install/Frameworks-dSYMs"
+# The first requested slice decides the framework list; every other slice has
+# to carry the same names, since an xcframework is per-framework.
+FIRST_SLICE="${SLICES%% *}"
+FIRST_FWKS="$(slice_builddir "$FIRST_SLICE")/install/Frameworks"
 
 echo
 echo "==> Combining slices into $XCFW_DIR (one xcframework per framework)"
-for fw in "$DEVICE_FWKS"/*.framework; do
+for fw in "$FIRST_FWKS"/*.framework; do
     name="$(basename "$fw" .framework)"
-    simfw="$SIM_FWKS/$name.framework"
-    if [[ ! -d "$simfw" ]]; then
-        echo "ERROR: $name.framework exists in the device slice but not the simulator slice" >&2
-        exit 1
-    fi
     # Embed per-slice dSYMs (produced by the Makefile's `dsyms` step) so
     # Xcode copies them into app archives — this is what satisfies App Store
     # Connect's "Upload Symbols" check for each embedded framework UUID.
     # -debug-symbols requires absolute paths and must follow the -framework
     # it belongs to.
-    args=( -framework "$fw" )
-    if [[ -d "$DEVICE_DSYMS/$name.framework.dSYM" ]]; then
-        args+=( -debug-symbols "$DEVICE_DSYMS/$name.framework.dSYM" )
-    fi
-    args+=( -framework "$simfw" )
-    if [[ -d "$SIM_DSYMS/$name.framework.dSYM" ]]; then
-        args+=( -debug-symbols "$SIM_DSYMS/$name.framework.dSYM" )
-    fi
+    args=()
+    for slice in $SLICES; do
+        slicedir="$(slice_builddir "$slice")"
+        slicefw="$slicedir/install/Frameworks/$name.framework"
+        if [[ ! -d "$slicefw" ]]; then
+            echo "ERROR: $name.framework is in the $FIRST_SLICE slice but not $slice" >&2
+            exit 1
+        fi
+        args+=( -framework "$slicefw" )
+        dsym="$slicedir/install/Frameworks-dSYMs/$name.framework.dSYM"
+        [[ -d "$dsym" ]] && args+=( -debug-symbols "$dsym" )
+    done
     echo "    $name.xcframework"
     xcodebuild -create-xcframework "${args[@]}" \
         -output "$XCFW_DIR/$name.xcframework" >/dev/null
