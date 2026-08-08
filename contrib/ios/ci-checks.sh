@@ -264,9 +264,22 @@ section "sysimage-ios.mk"
 # with Xcode.  Everywhere else this is a no-op rather than a false failure.
 if command -v xcrun >/dev/null 2>&1 && xcrun --sdk iphoneos --show-sdk-path >/dev/null 2>&1; then
     builddir=$(mktemp -d)
-    # stdlib.mk probes $(BUILDROOT)/usr/share/julia/stdlib/*/src, which does
-    # not exist in a bare BUILDROOT; those warnings are expected and would
-    # otherwise be the only thing visible when make fails.
+
+    # stdlib.mk makes every stdlib's installed Project.toml a prerequisite of
+    # sysbase.ji.  A real build has them by then -- the top-level Makefile
+    # makes julia-sysimg-ios-% wait on julia-stdlib -- but this check builds
+    # nothing, so stub the install tree or make stops at the first missing
+    # one and never expands stages 2-4.  Only the paths matter; `make -n`
+    # does not read them.
+    versdir="v$(cut -d. -f1-2 < VERSION)"
+    for name in $(ls -d stdlib/*/ 2>/dev/null | xargs -n1 basename) \
+                $(ls stdlib/*.version 2>/dev/null | xargs -n1 basename | sed 's/\.version$//'); do
+        mkdir -p "$builddir/usr/share/julia/stdlib/$versdir/$name/src"
+        : > "$builddir/usr/share/julia/stdlib/$versdir/$name/Project.toml"
+    done
+
+    # The stubs above satisfy the Project.toml prerequisites; the src/ dirs
+    # are empty, so stdlib.mk's `find` still says nothing to report.
     noise='^[[:space:]]*find: .*No such file or directory$'
     if out=$(make -f sysimage-ios.mk -n sysimg-ios-release \
                   BUILDROOT="$builddir" IOS=1 2>&1); then
