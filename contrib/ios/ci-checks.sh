@@ -83,6 +83,30 @@ else
     fail "libffi missing from DEP_LIBS or DEP_LIBS_STAGED_ALL in deps/Makefile"
 fi
 
+# Every `empty!(X_list)` this fork adds to a stdlib JLL has to have an `X_list`
+# to empty.  Upstream rewrites these files between releases -- 1.12's
+# p7zip_jll dropped both arrays -- and the hunk still merges cleanly onto the
+# unchanged `function __init__()` line, so the breakage only shows up as an
+# UndefVarError an hour into precompilation.
+jll_bad=""
+for d in stdlib/*_jll; do
+    f="$d/src/$(basename "$d").jl"
+    [[ -f "$f" ]] || continue
+    for v in PATH_list LIBPATH_list; do
+        declared=$(grep -cE "^const $v" "$f")
+        emptied=$(grep -cE "^[[:space:]]+empty!\($v\)" "$f")
+        if [[ "$emptied" -gt "$declared" ]]; then
+            jll_bad+="      $(basename "$d"): empty!($v) but no 'const $v'"$'\n'
+        fi
+    done
+done
+if [[ -z "$jll_bad" ]]; then
+    pass "every stdlib JLL empty!() has a matching declaration"
+else
+    fail "a stdlib JLL empties a list it does not declare"
+    printf '%s' "$jll_bad"
+fi
+
 # App Store validation rejects a binary that references private symbols, so
 # every keymgr/dyld-atfork call has to sit inside a !TARGET_OS_IPHONE guard.
 unguarded=$(python3 - <<'PY'
