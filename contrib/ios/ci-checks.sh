@@ -208,6 +208,10 @@ else
     # makefile rule that applies it has already `cd`'d past.
     PATCHES=(
       "deps/patches/llvm-ios-no-z-defs.patch|JuliaLang/llvm-project|$LLVM_REF|1"
+      # Same patch, second consumer: libunwind configures through
+      # llvm-project's `runtimes` dir and so reads its own copy of
+      # HandleLLVMOptions.cmake, at a different LLVM version.
+      "deps/patches/llvm-ios-no-z-defs.patch|llvm/llvm-project|llvmorg-$LLVMUNWIND_VER|1"
       "deps/patches/llvm-ios-sancov-libcxx-string-init.patch|JuliaLang/llvm-project|$LLVM_REF|1"
       "deps/patches/llvm-libunwind-ios-public-dyld-api.patch|llvm/llvm-project|llvmorg-$LLVMUNWIND_VER|2"
       "stdlib/patches/Pkg-spawn-free-gzip.patch|JuliaLang/Pkg.jl|$PKG_REF|1"
