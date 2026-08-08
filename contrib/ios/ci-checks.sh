@@ -264,6 +264,10 @@ section "sysimage-ios.mk"
 # with Xcode.  Everywhere else this is a no-op rather than a false failure.
 if command -v xcrun >/dev/null 2>&1 && xcrun --sdk iphoneos --show-sdk-path >/dev/null 2>&1; then
     builddir=$(mktemp -d)
+    # stdlib.mk probes $(BUILDROOT)/usr/share/julia/stdlib/*/src, which does
+    # not exist in a bare BUILDROOT; those warnings are expected and would
+    # otherwise be the only thing visible when make fails.
+    noise='^[[:space:]]*find: .*No such file or directory$'
     if out=$(make -f sysimage-ios.mk -n sysimg-ios-release \
                   BUILDROOT="$builddir" IOS=1 2>&1); then
         stages=$(grep -c -- '--output-ji\|--output-o' <<< "$out")
@@ -271,11 +275,11 @@ if command -v xcrun >/dev/null 2>&1 && xcrun --sdk iphoneos --show-sdk-path >/de
             pass "sysimage-ios.mk expands all bake stages ($stages julia invocations)"
         else
             fail "sysimage-ios.mk expanded only $stages bake stages, expected 3"
-            echo "$out" | sed 's/^/      /' | head -40
+            grep -vE "$noise" <<< "$out" | tail -40 | sed 's/^/      /'
         fi
     else
         fail "sysimage-ios.mk does not expand"
-        echo "$out" | sed 's/^/      /' | head -40
+        grep -vE "$noise" <<< "$out" | tail -40 | sed 's/^/      /'
     fi
     rm -rf "$builddir"
 else

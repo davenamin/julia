@@ -88,6 +88,21 @@ jobs:
       - uses: actions/checkout@v4
       - run: contrib/ios/ci-checks.sh
 
+  # Everything in ci-checks.sh that needs macOS and the iOS SDK -- chiefly
+  # expanding sysimage-ios.mk, which cannot even parse elsewhere.  A separate
+  # job because it needs no build at all: as a trailing step of host-build it
+  # reported its answer forty minutes late.
+  macos-checks:
+    name: macOS-only checks
+    needs: checks
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install --quiet --break-system-packages pyyaml || true
+      - run: xcrun --sdk iphoneos --show-sdk-path
+      - run: contrib/ios/ci-checks.sh --offline
+
   host-build:
     name: macOS host build
     needs: checks
@@ -176,9 +191,6 @@ jobs:
 
       - name: Accelerate forwarding
         run: ./usr/bin/julia --startup-file=no contrib/ios/test-accelerate.jl
-
-      - name: sysimage-ios.mk expands
-        run: contrib/ios/ci-checks.sh --offline
 
       - name: Publish the host julia
         run: tar -czf "$RUNNER_TEMP/host-usr.tar.gz" usr
