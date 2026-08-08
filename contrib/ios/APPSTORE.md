@@ -245,12 +245,11 @@ for `OS = Darwin`, and an iOS build is one.  `NetworkOptions.ca_roots()`
 returns `nothing` on Apple platforms, so `CURLOPT_CAINFO` is never set and
 nothing overrides the system anchors.
 
-libgit2 needed help.  It autodetects its HTTPS backend and prefers Secure
-Transport, but only looks for Security.framework when `CMAKE_SYSTEM_NAME` is
-`Darwin` — a cmake iOS cross-build sets it to `iOS`, so the search never ran
-and the selection fell through to mbedTLS.  `deps/patches/libgit2-ios-securetransport.patch`
-widens that condition and `deps/libgit2.mk` names the backend explicitly, so
-a mis-detection is a configure error rather than a silent fallback.
+libgit2 autodetects its HTTPS backend and prefers Secure Transport, and as of
+1.9.0 it does look for Security.framework under a cmake iOS build.
+`deps/libgit2.mk` names the backend explicitly anyway, so a future change in
+that autodetection is a configure error rather than a silent fallback to a
+backend that needs a CA bundle nothing supplies.
 
 Two consequences worth knowing:
 

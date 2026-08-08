@@ -10,8 +10,8 @@ LinearAlgebra.__init__ on iOS builds.  See the comments in blas.jl for why
 the ILP64 suffix hint needs its leading \x1a byte, and why the interface is
 checked both before and after forwarding.
 
---- a/src/LinearAlgebra.jl	2026-08-08 19:31:55.073476713 +0000
-+++ b/src/LinearAlgebra.jl	2026-08-08 19:32:06.161784505 +0000
+--- a/src/LinearAlgebra.jl
++++ b/src/LinearAlgebra.jl
 @@ -827,7 +827,26 @@
      try
          verbose = parse(Bool, get(ENV, "LBT_VERBOSE", "false"))
@@ -39,8 +39,8 @@ checked both before and after forwarding.
      catch ex
          Base.showerror_nostdio(ex, "WARNING: Error during initialization of module LinearAlgebra")
      end
---- a/src/blas.jl	2026-08-08 19:31:55.073540307 +0000
-+++ b/src/blas.jl	2026-08-08 19:32:06.161294522 +0000
+--- a/src/blas.jl
++++ b/src/blas.jl
 @@ -2234,6 +2234,141 @@
      end
  end

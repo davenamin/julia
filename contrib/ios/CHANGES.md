@@ -6,12 +6,17 @@ reading the whole diff.  For the App Store consequences of these changes,
 see `APPSTORE.md`; for how to build, see the header of `build-xcframework.sh`.
 
 Everything here is gated on `IOS=1` or on the `Base.IOS` constant it bakes,
-with four deliberate exceptions: the dependency bumps; the JLL library-path
-fix, an upstream bug that happens to bite hardest here;
+with three deliberate exceptions: the dependency build fixes; the JLL
+library-path fix, an upstream bug that happens to bite hardest here; and
 `BLAS.forward_accelerate!` / `BLAS.report`, defined on every platform but
-only called automatically under `Base.IOS`; and the libgit2 cmake patch,
-which only widens the guard on a framework search and so changes nothing
-off Apple's embedded platforms.
+only called automatically under `Base.IOS`.
+
+CI lives in `.github/workflows/ios.yml`, in three tiers: structural checks on
+every push (`contrib/ios/ci-checks.sh`, also runnable locally and the thing to
+run first), a macOS host build, and the full cross-build behind a manual
+dispatch.  The checks tier exists mostly to catch a fork-local patch drifting
+off the revision it is pinned to, which otherwise surfaces an hour into a
+build.
 
 Conventions for work on this branch:
 
@@ -37,7 +42,6 @@ Conventions for work on this branch:
 | `stdlib/patches/Pkg-spawn-free-gzip.patch` | Applied to the vendored Pkg checkout at extraction (see below). |
 | `deps/libffi.mk`, `deps/libffi.version` | libffi, built for iOS only — the interpreter makes foreign calls through it. |
 | `deps/patches/llvm-ios-*.patch`, `llvm-libunwind-ios-public-dyld-api.patch` | iOS build fixes for LLVM and libunwind. |
-| `deps/patches/libgit2-ios-securetransport.patch` | Lets libgit2 find Security.framework under a cmake iOS build, so HTTPS uses the device trust store. |
 | `deps/tools/objconv-fix-alignment.sh` | Host-tool wrapper for the OpenBLAS ILP64 symbol-suffixing step. |
 
 ## Runtime (`src/`, `cli/`)
@@ -108,13 +112,13 @@ Conventions for work on this branch:
   tools during cross-compilation; bake `Base.IOS` into `build_h.jl`.
 - `deps/*.mk` — cross-compile fixes (host-tool routing, Xcode 26 SDK).
 - `deps/libgit2.mk` — `-DUSE_HTTPS=SecureTransport` on iOS, so certificates are
-  validated against the device's trust store.  libgit2 autodetects mbedTLS
-  otherwise: it only searches for Security.framework when `CMAKE_SYSTEM_NAME`
-  is `Darwin`, and a cmake iOS build sets it to `iOS`.  That mattered because
-  `NetworkOptions.ca_roots()` returns nothing on Apple platforms, assuming the
-  system store — so the mbedTLS backend was left with no roots at all.
-  libcurl was already correct: `deps/curl.mk` selects `--with-secure-transport`
-  for `OS = Darwin`, which iOS builds are.
+  validated against the device's trust store.  libgit2 1.9.0 does find
+  Security.framework under a cmake iOS build on its own; naming the backend
+  keeps a future autodetection change from silently selecting one that needs
+  a CA bundle, since `NetworkOptions.ca_roots()` returns nothing on Apple
+  platforms on the assumption that the system store is in use.  libcurl was
+  already correct: `deps/curl.mk` selects `--with-secure-transport` for
+  `OS = Darwin`, which iOS builds are.
 - `deps/tools/stdlib-external.mk` — a `source-patched` step for vendored
   stdlibs, applying `stdlib/patches/<name>-*.patch` after extraction.  Kept
   separate from `deps/patches/` because the two namespaces collide

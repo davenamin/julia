@@ -20,13 +20,11 @@ endif
 LIBGIT2_OPTS := $(CMAKE_COMMON) -DCMAKE_BUILD_TYPE=Release -DUSE_THREADS=ON -DUSE_BUNDLED_ZLIB=OFF -DUSE_SSH=ON -DBUILD_CLI=OFF
 ifeq ($(IOS),1)
 # Validate certificates against the device's trust store rather than a
-# bundled PEM.  libgit2 would otherwise autodetect mbedTLS here — it only
-# looks for Security.framework when CMAKE_SYSTEM_NAME is "Darwin", and an
-# iOS cross-build sets it to "iOS" (see the patch below) — and mbedTLS needs
-# a CA bundle that nothing supplies, because `NetworkOptions.ca_roots()`
-# returns nothing on Apple platforms on the assumption that the system store
-# is in use.  Naming the backend explicitly also turns a mis-detection into
-# a configure error instead of a silent fallback.
+# bundled PEM.  libgit2's autodetection does find Security.framework on iOS
+# as of 1.9.0, but naming the backend turns a future mis-detection into a
+# configure error instead of a silent fallback to something that needs a CA
+# bundle nothing supplies -- `NetworkOptions.ca_roots()` returns nothing on
+# Apple platforms, on the assumption that the system store is in use.
 LIBGIT2_OPTS += -DUSE_HTTPS=SecureTransport
 # system() is unavailable on iOS; skip building the test suite.
 LIBGIT2_OPTS += -DBUILD_TESTS=OFF
@@ -71,18 +69,6 @@ endif
 LIBGIT2_OPTS += -DREGEX_BACKEND="builtin"
 
 LIBGIT2_SRC_PATH := $(SRCCACHE)/$(LIBGIT2_SRC_DIR)
-
-# Applied everywhere rather than under IOS=1: it only widens the condition
-# guarding the Security.framework search, so on any other platform the
-# selection is unchanged, and keeping one extracted tree valid for both
-# host and iOS builds avoids re-patching a shared srccache.
-$(LIBGIT2_SRC_PATH)/libgit2-ios-securetransport.patch-applied: $(LIBGIT2_SRC_PATH)/source-extracted
-	cd $(LIBGIT2_SRC_PATH) && \
-		patch -p1 -f < $(SRCDIR)/patches/libgit2-ios-securetransport.patch
-	echo 1 > $@
-
-$(BUILDDIR)/$(LIBGIT2_SRC_DIR)/build-configured: \
-	$(LIBGIT2_SRC_PATH)/libgit2-ios-securetransport.patch-applied
 
 $(BUILDDIR)/$(LIBGIT2_SRC_DIR)/build-configured: $(LIBGIT2_SRC_PATH)/source-extracted
 	mkdir -p $(dir $@)

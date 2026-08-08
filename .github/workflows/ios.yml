@@ -1,0 +1,200 @@
+name: iOS port
+
+# Build/test iteration for the iOS cross-build, in three tiers that get
+# progressively more expensive.  Only the first two run automatically.
+#
+#   checks       ~2 min, ubuntu.  Structural checks, chiefly that every
+#                fork-local patch still applies to the revision it is pinned
+#                to.  This is the tier worth waiting for on every push.
+#   host-build   ~40-70 min, macOS.  A normal macOS build.  Compiles all the
+#                C/C++ this fork touches and exercises both stdlib patches,
+#                because the external-stdlib patch step is not iOS-gated.
+#                Then runs the two host-runnable iOS tests.
+#   ios-build    hours, macOS, manual only.  The real cross-build.
+#
+# What host-build cannot cover, because it is all behind _OS_IOS_ or IOS=1:
+# src/processor_arm.cpp's iOS _get_host_cpu, src/interpreter-ccall.c's body,
+# and the entire sysimage bake.  Only ios-build compiles those.
+#
+# On ios-build's runtime: iOS forces USE_BINARYBUILDER=0 (Make.inc), so LLVM
+# and every other dependency is built from source, and then a host julia has
+# to be built as well because the bake stages run it against the iOS tree.
+# Only the downloaded tarballs are cached — the built dependency tree is far
+# too large for actions/cache.  If this exceeds the 6-hour job limit, split
+# the dependency build into its own job rather than raising the timeout.
+
+on:
+  push:
+    branches: [claude/ios-runtime-1.12]
+    paths-ignore: ['doc/**', '**/*.md']
+  pull_request:
+    branches: [claude/ios-runtime-1.12]
+  workflow_dispatch:
+    inputs:
+      run_host_build:
+        description: 'Run the macOS host build'
+        type: boolean
+        default: true
+      run_ios_build:
+        description: 'Run the full iOS cross-build (hours)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  checks:
+    name: structural checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: contrib/ios/ci-checks.sh
+
+  host-build:
+    name: macOS host build
+    needs: checks
+    if: github.event_name != 'workflow_dispatch' || inputs.run_host_build
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      # Downloaded tarballs only; the build tree itself is not cached, so a
+      # green run always means everything in-tree was compiled from scratch.
+      - name: Cache dependency downloads
+        uses: actions/cache@v4
+        with:
+          path: deps/srccache
+          key: srccache-host-${{ hashFiles('deps/*.version', 'deps/checksums/**') }}
+          restore-keys: srccache-host-
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          echo "MAKEFLAGS=-j$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+
+      # JULIA_PRECOMPILE=0 skips generate_precompile.jl, a large fraction of
+      # the wall time that exercises nothing this fork changes.
+      - name: Build
+        run: make JULIA_PRECOMPILE=0 VERBOSE=1
+
+      - name: Version
+        run: ./usr/bin/julia -e 'using InteractiveUtils; versioninfo()'
+
+      # Both stdlib patches land in a host build too.  Check they actually
+      # took, rather than trusting that `make` would have failed if not.
+      - name: Patched stdlibs took effect
+        run: |
+          ./usr/bin/julia --startup-file=no -e '
+            using Pkg
+            for f in (:can_spawn_7z, :open_gzip_tarball)
+                isdefined(Pkg.PlatformEngines, f) || error("Pkg.PlatformEngines.$f missing")
+            end
+            using LinearAlgebra
+            for f in (:forward_accelerate!, :report)
+                isdefined(LinearAlgebra.BLAS, f) || error("BLAS.$f missing")
+            end
+            println("stdlib patches applied")'
+
+      # The in-process inflate path, compared against the 7z path on the same
+      # archives.  The script sets JULIA_PKG_NO_SUBPROCESS itself to force the
+      # branch a device would take.
+      - name: Spawn-free gzip
+        run: ./usr/bin/julia --startup-file=no contrib/ios/test-gzip-inflate.jl
+
+      # Accelerate's ILP64 interface and the suffix-hint handling, on the one
+      # non-iOS platform where the same code path is reachable.
+      - name: Accelerate forwarding
+        run: ./usr/bin/julia --startup-file=no contrib/ios/test-accelerate.jl
+
+      # Needs Make.inc's iOS SDK probe to succeed, so it only does anything
+      # here; --offline skips the patch fetches the checks job already did.
+      - name: sysimage-ios.mk expands
+        run: contrib/ios/ci-checks.sh --offline
+
+  ios-build:
+    name: iOS cross-build
+    needs: checks
+    if: github.event_name == 'workflow_dispatch' && inputs.run_ios_build
+    runs-on: macos-15
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache dependency downloads
+        uses: actions/cache@v4
+        with:
+          path: deps/srccache
+          key: srccache-ios-${{ hashFiles('deps/*.version', 'deps/checksums/**') }}
+          restore-keys: srccache-ios-
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          echo "NPROC=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+
+      # The bake stages run the host julia against the iOS tree, so this has
+      # to exist before the cross-build can produce a sysimage.
+      - name: Build host julia
+        run: make JULIA_PRECOMPILE=0 -j"$NPROC"
+
+      # `configure` prompts when the directory is not empty; there is no tty.
+      - name: Configure out-of-tree iOS build
+        run: yes | make O=build-ios-device configure
+
+      # Split from the runtime build so a dependency failure is distinguishable
+      # in the log from a compile failure in Julia's own sources.  This is the
+      # long one: LLVM from source.
+      - name: Build dependencies
+        run: make -C build-ios-device IOS=1 -j"$NPROC" julia-deps VERBOSE=1
+
+      - name: Build libjulia for iOS
+        run: make -C build-ios-device IOS=1 -j"$NPROC" julia-src-release VERBOSE=1
+
+      # IOS_SYSIMAGE defaults to 1 (Make.inc), so `julia-release` drives the
+      # four bake stages in sysimage-ios.mk on top of the libraries above.
+      - name: Bake the cross-targeted sysimage
+        run: |
+          make -C build-ios-device IOS=1 IOS_PLATFORM=iphoneos \
+               -j"$NPROC" julia-release VERBOSE=1
+
+      # A wrong-architecture object is the failure mode --target exists to
+      # prevent, and it stays silent until the app refuses to launch.
+      - name: Sysimage is an iOS arm64 Mach-O
+        run: |
+          sys=build-ios-device/usr/lib/julia/sys.dylib
+          file "$sys"
+          lipo -archs "$sys" | grep -qx arm64 \
+            || { echo "sys.dylib is not arm64"; exit 1; }
+          vtool -show-build-version "$sys" | tee /tmp/vtool.txt
+          grep -q 'platform iOS' /tmp/vtool.txt \
+            || { echo "sys.dylib is not built for iOS"; exit 1; }
+
+      # The device-slice half of what build-xcframework.sh does.  The full
+      # script also builds the simulator slice, which would roughly double an
+      # already multi-hour job for no extra coverage of anything this fork
+      # changes; run it by hand when producing something to ship.
+      - name: Assemble the device frameworks
+        run: |
+          make -C contrib/ios framework \
+               BUILDROOT="$PWD/build-ios-device" \
+               prefix="$PWD/build-ios-device/install" \
+               IOS=1 IOS_PLATFORM=iphoneos
+          ls -la build-ios-device/install/Frameworks
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-device-frameworks
+          path: |
+            build-ios-device/usr/lib/julia/sys.dylib
+            build-ios-device/install/Frameworks
+          if-no-files-found: warn
