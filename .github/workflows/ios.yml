@@ -11,11 +11,16 @@ name: iOS port
 #                that need a runnable REPL, and *publishes usr/ as an
 #                artifact*.  Both iOS jobs need a host julia for the sysimage
 #                bake, so this is the producer, not a parallel tier.
-#   ios-sim      macOS, manual.  Restores the host julia, builds the
+#   ios-sim      macOS, opt-in.  Restores the host julia, builds the
 #                simulator slice, and RUNS it under `simctl spawn`.  The only
 #                stage that executes iOS-targeted code.
-#   ios-build    macOS, manual.  Same, for the device slice, which cannot be
+#   ios-build    macOS, opt-in.  Same, for the device slice, which cannot be
 #                run here but is the artifact an app ships.
+#
+# The two iOS stages cost hours, so they never run by default.  Opt in either
+# from the Actions tab (Run workflow), or by putting `[run-ios]` in a commit
+# message -- the latter so an automation that can push but has no
+# `actions: write` token can still drive a build.
 #
 # Caching, and what is deliberately not cached:
 #
@@ -152,7 +157,9 @@ jobs:
   ios-sim:
     name: iOS simulator build + run
     needs: host-build
-    if: github.event_name == 'workflow_dispatch' && inputs.run_ios_sim
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.run_ios_sim) ||
+      contains(github.event.head_commit.message, '[run-ios]')
     runs-on: macos-15
     timeout-minutes: 360
     steps:
@@ -266,7 +273,9 @@ jobs:
   ios-build:
     name: iOS device cross-build
     needs: host-build
-    if: github.event_name == 'workflow_dispatch' && inputs.run_ios_build
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.run_ios_build) ||
+      contains(github.event.head_commit.message, '[run-ios]')
     runs-on: macos-15
     timeout-minutes: 360
     steps:
