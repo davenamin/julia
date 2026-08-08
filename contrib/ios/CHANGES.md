@@ -1,17 +1,17 @@
-# What this fork changes, relative to `release-1.10`
+# What this fork changes, relative to `release-1.12`
 
-An inventory of the delta from upstream `JuliaLang/julia` `release-1.10`,
-grouped by area, so a rebase onto a later 1.10.x can be planned without
+An inventory of the delta from upstream `JuliaLang/julia` `release-1.12`,
+grouped by area, so a rebase onto a later 1.12.x can be planned without
 reading the whole diff.  For the App Store consequences of these changes,
 see `APPSTORE.md`; for how to build, see the header of `build-xcframework.sh`.
 
 Everything here is gated on `IOS=1` or on the `Base.IOS` constant it bakes,
-with five deliberate exceptions: the dependency bumps; the JLL library-path
-fix and the pkgimage linker flag, both upstream bugs that happen to bite
-hardest here; `BLAS.forward_accelerate!` / `BLAS.report`, defined on every
-platform but only called automatically under `Base.IOS`; and the libgit2
-cmake patch, which only widens the guard on a framework search and so
-changes nothing off Apple's embedded platforms.
+with four deliberate exceptions: the dependency bumps; the JLL library-path
+fix, an upstream bug that happens to bite hardest here;
+`BLAS.forward_accelerate!` / `BLAS.report`, defined on every platform but
+only called automatically under `Base.IOS`; and the libgit2 cmake patch,
+which only widens the guard on a framework search and so changes nothing
+off Apple's embedded platforms.
 
 Conventions for work on this branch:
 
@@ -120,43 +120,34 @@ Conventions for work on this branch:
   separate from `deps/patches/` because the two namespaces collide
   (`SuiteSparse` is both a dep and an stdlib).
 
-### Dependency bumps (for Xcode 26 / iOS compatibility)
+### Dependencies
 
-| Dep | `release-1.10` | here |
-|---|---|---|
-| blastrampoline | 5.11.0 | 5.15.0 |
-| GMP | 6.2.1 | 6.3.0 |
-| MPFR | 4.2.0 | 4.2.2 |
-| OpenLibm | 0.8.5 | 0.8.7 |
-| zlib | 1.2.13 | 1.3.1 |
+`release-1.12` already ships the versions this port needed on 1.10
+(blastrampoline 5.15.0, GMP 6.3.0, MPFR 4.2.2, OpenLibm 0.8.7, zlib 1.3.1),
+so no bumps remain — only the iOS build fixes that travelled with them.
 
 A new dependency, libffi 3.5.2, is built **only** under `IOS=1` and linked
 statically into `libjulia-internal`: an App Store bundle may not contain loose
 dylibs, so a shared library would cost another framework for a single
 consumer.  It is MIT-licensed, so it does not disturb `USE_GPL_LIBS = 0`.
 
-The GMP bump also drops three patches upstream carries for 6.2.1.
+Three LLVM-side patches are iOS-only and are re-anchored to whatever LLVM the
+base ships (18.1.7 here, libunwind 19.1.4): `llvm-ios-no-z-defs` (ld64 has no
+`-z`), `llvm-ios-sancov-libcxx-string-init` (a libc++ brace-init rejection in
+the iPhoneOS 26 SDK) and `llvm-libunwind-ios-public-dyld-api` (ITMS-90338).
 
-None of these versions are in `cache.julialang.org`, which only holds what
-`release-1.10` CI itself fetched, so each is downloaded from its upstream
-mirror on a clean build and a slow mirror shows up as a timeout rather than
-a compile error.  See the troubleshooting notes in the header of
-`build-xcframework.sh`.
+libffi is not in `cache.julialang.org`, which only holds what upstream CI
+itself fetched, so it is downloaded from its upstream mirror on a clean build
+and a slow mirror shows up as a timeout rather than a compile error.  See the
+troubleshooting notes in the header of `build-xcframework.sh`.
 
 ## Base
 
-- `base/linking.jl` — link pkgimages with `-no_data_const`.  The bundled LLD 15
-  migrates read-only data into a `__DATA_CONST` segment but never sets the
-  `SG_READ_ONLY` flag that goes with it (LLVM 16 added that), and the minimum
-  OS it records is the build machine's, so on a recent macOS host dyld refuses
-  every pkgimage: `'(__DATA_CONST segment missing SG_READ_ONLY flag)'`.  Not
-  emitting the segment sidesteps the check.  **Upstream Julia 1.10 bug, not
-  iOS-specific** — it breaks `make` at `stdlibs-cache-release` on any recent
-  macOS.
+Nothing outside the stdlib JLLs; see below.
 
 ## Standard library
 
-- `stdlib/*_jll/src/*.jl` (22 files) and `base/linking.jl` — `empty!` the
+- `stdlib/*_jll/src/*.jl` (22 files) — `empty!` the
   `PATH_list` / `LIBPATH_list` arrays at the top of `__init__`.  These are
   serialized into the sysimage with the build machine's paths already in
   them, so appending left stale entries in front of the runtime ones
@@ -164,8 +155,10 @@ a compile error.  See the troubleshooting notes in the header of
   in a build tree and run from an install tree accumulates the same way.
 - `stdlib/CompilerSupportLibraries_jll`, `stdlib/OpenBLAS_jll` — skip
   libgfortran on iOS, which has none.
-- `stdlib/LinearAlgebra/src/{blas.jl,LinearAlgebra.jl}` — forward Apple's
-  Accelerate over the OpenBLAS base on iOS, plus `BLAS.report()`.  A
+- `stdlib/patches/LinearAlgebra-ios-accelerate.patch` — forward Apple's
+  Accelerate over the OpenBLAS base on iOS, plus `BLAS.report()`.
+  LinearAlgebra is an external stdlib as of 1.12, so this is a patch against
+  the fetched checkout rather than an in-tree edit.  A
   performance layer: `FC := false` makes OpenBLAS build `NOFORTRAN`, which
   selects its `C_LAPACK` sources rather than dropping LAPACK, so the
   factorizations work without Accelerate too.  Since libblastrampoline

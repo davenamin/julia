@@ -150,10 +150,12 @@ components Julia uses for sparse factorizations — CHOLMOD, UMFPACK, SPQR —
 are GPL, whose terms cannot be met under the App Store's distribution
 model.  With this off, `libsuitesparse` is never built, its libraries are
 dropped from `JL_PRIVATE_LIBS` (so no SuiteSparse frameworks are emitted),
-`Base.USE_GPL_LIBS` is baked `false`, and both `SuiteSparse_jll.__init__`
-and SparseArrays' `include`s of `solvers/{umfpack,cholmod,spqr}.jl` are
-guarded on that constant — so this is a configuration upstream supports,
-not a hole punched in the build.
+`Base.USE_GPL_LIBS` is baked `false`, and SparseArrays' `include`s of
+`solvers/{umfpack,cholmod,spqr}.jl` are guarded on that constant — so this
+is a configuration upstream supports, not a hole punched in the build.
+`SuiteSparse_jll.__init__` gates only the GPL group (CHOLMOD, RBio, SPQR,
+UMFPACK); it would still `dlopen` the BSD-3 ordering libraries and the LGPL
+KLU group, but with `libsuitesparse` never built there is nothing to open.
 
 What it costs on device: **sparse** `lu`, `cholesky`, `qr` and `\`.  Dense
 linear algebra is unaffected (that is BLAS/LAPACK, below).  Override with

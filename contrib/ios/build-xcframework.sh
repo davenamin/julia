@@ -308,10 +308,8 @@ package_runtime_resources() {
         # tree + any artifacts it pulled in.  Run with the same env vars
         # as the sysimage bake so dependency resolution sees the same
         # project + depot.
-        # --pkgimages=no: avoid the host's broken native-pkgimage path (its
-        # bundled LLD 15 omits SG_READ_ONLY on __DATA_CONST, which recent
-        # macOS/dyld rejects at dlopen).  This only reads the manifest, but
-        # keep it consistent with the bake so nothing tries to link a pkgimage.
+        # --pkgimages=no: this only reads the manifest, but keep it
+        # consistent with the bake so nothing tries to link a pkgimage.
         JULIA_LOAD_PATH=@:@stdlib \
         JULIA_PROJECT="$IOS_SYSIMAGE_EXTRA_PROJECT" \
         "$host_julia" --startup-file=no --pkgimages=no - "$out" <<'JULIA'

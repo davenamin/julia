@@ -89,8 +89,7 @@ IOS_SYSIMAGE_EXTRA_JL ?=
 # cache and no native .dylib, which is all the bake needs — stage 3 loads the
 # package to compile its methods into sys.dylib via --compile=all, so host-side
 # native pkgimages never affect the result.  Skipping them saves a link per
-# package.  (Producing them also used to fail outright on recent macOS; see the
-# `-no_data_const` comment in base/linking.jl.)
+# package.
 #
 # NOTE: only pure-Julia packages bake cleanly.  Packages that load JLLs
 # (Foo_jll) require the corresponding lib<foo>.dylib to be shipped in the
