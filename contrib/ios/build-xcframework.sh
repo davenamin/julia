@@ -158,9 +158,16 @@ build_slice() {
     echo "==> Building $platform slice in $builddir"
     echo "    JOBS=$JOBS  IOS_VERSION_MIN=$IOS_VERSION_MIN"
 
-    # Seed the out-of-tree build dir on first run.
-    if [[ ! -f "$builddir/Make.inc" ]]; then
-        make -C "$JULIA_SRC" O="$builddir" configure
+    # Seed the out-of-tree build dir on first run.  Probe for the Makefile
+    # configure actually writes: it creates $builddir/Makefile (plus one per
+    # build subdirectory, sysimage.mk and pkgimage.mk) and never a Make.inc,
+    # so probing for that ran configure on every invocation -- fine the first
+    # time on an empty directory, and a hang or a failure afterwards, because
+    # configure prompts for confirmation once the directory is not empty.
+    # `yes` answers that prompt for the case where the directory exists but
+    # was never configured, which has no tty in CI.
+    if [[ ! -f "$builddir/Makefile" ]]; then
+        yes | make -C "$JULIA_SRC" O="$builddir" configure
     fi
 
     # Force a sysimage rebuild when asked.  IOS_SYSIMAGE_EXTRA_JL / _EXTRA_PROJECT
