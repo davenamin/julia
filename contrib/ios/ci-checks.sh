@@ -123,6 +123,52 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+section "workflow"
+
+if [[ -f .github/workflows/ios.yml ]] && command -v python3 >/dev/null 2>&1; then
+    out=$(python3 - <<'WFPY' 2>&1
+import sys
+try:
+    import yaml
+except ImportError:
+    print("SKIP: no pyyaml"); sys.exit(0)
+d = yaml.safe_load(open(".github/workflows/ios.yml"))
+jobs = d["jobs"]
+bad = []
+for name, job in jobs.items():
+    needs = job.get("needs", [])
+    for n in ([needs] if isinstance(needs, str) else needs):
+        if n not in jobs:
+            bad.append("%s needs unknown job %r" % (name, n))
+# Every artifact downloaded must be uploaded by some job, or the consumer
+# blocks forever waiting for something nothing produces.
+produced = set()
+for job in jobs.values():
+    for s in job["steps"]:
+        if str(s.get("uses", "")).startswith("actions/upload-artifact"):
+            produced.add(s.get("with", {}).get("name"))
+for name, job in jobs.items():
+    for s in job["steps"]:
+        if str(s.get("uses", "")).startswith("actions/download-artifact"):
+            a = s.get("with", {}).get("name")
+            if a not in produced:
+                bad.append("%s downloads artifact %r that nothing uploads" % (name, a))
+print("\n".join(bad))
+WFPY
+)
+    if [[ -z "$out" ]]; then
+        pass ".github/workflows/ios.yml parses; job and artifact wiring resolves"
+    elif [[ "$out" == SKIP:* ]]; then
+        skip ".github/workflows/ios.yml checks (${out#SKIP: })"
+    else
+        fail ".github/workflows/ios.yml is inconsistent"
+        echo "$out" | sed 's/^/      /'
+    fi
+else
+    skip "workflow checks"
+fi
+
+# ---------------------------------------------------------------------------
 section "fork-local patches apply to their pinned sources"
 
 if [[ "$OFFLINE" == 1 ]]; then

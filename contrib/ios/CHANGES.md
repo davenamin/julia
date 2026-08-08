@@ -11,17 +11,23 @@ library-path fix, an upstream bug that happens to bite hardest here; and
 `BLAS.forward_accelerate!` / `BLAS.report`, defined on every platform but
 only called automatically under `Base.IOS`.
 
-CI lives in `.github/workflows/ios.yml`, in four tiers: structural checks on
-every push (`contrib/ios/ci-checks.sh`, also runnable locally and the thing to
-run first), a macOS host build, and behind a manual dispatch both a simulator
-build that *runs* the port under `simctl spawn` and the device cross-build.
-The simulator tier is the only one that executes iOS-targeted code — the
-simulator defines `TARGET_OS_IPHONE`, so the libffi ccall interpreter, the
-sysctl CPU detection and the framework `dlopen` fallback are all live there.
-It cannot show anything caused by a device *restriction* rather than by iOS
-code: the JIT works, `fork`/`exec` succeed and the bundle is writable.  The checks tier exists mostly to catch a fork-local patch drifting
-off the revision it is pinned to, which otherwise surfaces an hour into a
-build.
+CI lives in `.github/workflows/ios.yml`, as a pipeline rather than parallel
+tiers, because the expensive pieces are shared.  `checks` runs
+`contrib/ios/ci-checks.sh` in seconds on every push (also runnable locally,
+and the thing to run first).  `host-build` then builds the host julia, runs
+the tests that need a REPL, and publishes `usr/` as an artifact — both iOS
+jobs need a host julia for the sysimage bake, so it is the producer, not a
+parallel stage.  `ios-sim` and `ios-build` restore that artifact instead of
+building their own, and cache the installed iOS dependency prefix on a key
+covering only what the dependency build reads, so ordinary `src/` iteration
+keeps hitting it.
+
+`ios-sim` is the only stage that *runs* iOS-targeted code: the simulator
+defines `TARGET_OS_IPHONE`, so the libffi ccall interpreter, the sysctl CPU
+detection and the framework `dlopen` fallback are all live, and
+`contrib/ios/simulator-selftest.c` drives them under `simctl spawn`.  It
+cannot show anything caused by a device *restriction* rather than by iOS
+code: the JIT works there, `fork`/`exec` succeed and the bundle is writable.
 
 Conventions for work on this branch:
 
