@@ -207,8 +207,14 @@ jobs:
       - name: Accelerate forwarding
         run: ./usr/bin/julia --startup-file=no contrib/ios/test-accelerate.jl
 
+      # usr/share/julia/stdlib/vX.Y is a directory of symlinks into
+      # stdlib/<Name>-<sha>, so usr/ alone is not a working prefix anywhere
+      # else: the iOS jobs build out of tree and extract their own copies
+      # under build-ios-*/stdlib, leaving every one of those links dangling.
+      # The bake reads them regardless of JULIA_LOAD_PATH -- base/sysimg.jl
+      # forces @stdlib -- so the sources have to travel with the prefix.
       - name: Publish the host julia
-        run: tar -czf "$RUNNER_TEMP/host-usr.tar.gz" usr
+        run: tar -czf "$RUNNER_TEMP/host-usr.tar.gz" usr stdlib/*-*/
       - uses: actions/upload-artifact@v4
         with:
           name: host-usr
