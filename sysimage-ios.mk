@@ -98,18 +98,14 @@ IOS_SYSIMAGE_EXTRA_JL ?=
 # package works on iOS.
 IOS_SYSIMAGE_EXTRA_PROJECT ?=
 
-# The stdlibs this bake loads, named as a path rather than left to `@stdlib`.
-# `@stdlib` resolves through Sys.STDLIB, which Sys.__init_build() derives from
-# the running julia's bindir -- the host prefix, since the host julia is what
-# runs the bake.  In an out-of-tree build that is the wrong tree twice over:
-# its stdlib entries are symlinks into $(JULIAHOME)/stdlib, and stdlib/Makefile
-# extracts an external stdlib under $(BUILDROOT)/stdlib instead, so nothing
-# ever creates what they point at and `using SHA` fails with "Package SHA not
-# found in current path".  This build's own directory is populated by
-# julia-stdlib and holds the very sources STDLIB_SRCS lists, which is what the
-# bake should be reading.  A directory in LOAD_PATH is a package-directory
-# environment, exactly what `@stdlib` expands to.
-IOS_STDLIB_PATH := $(build_datarootdir)/julia/stdlib/$(VERSDIR)
+# Where the bake actually reads its stdlibs from.  Not a choice this file
+# makes: base/sysimg.jl runs `push!(empty!(LOAD_PATH), "@stdlib")` before
+# loading them, discarding JULIA_LOAD_PATH, and `@stdlib` is Sys.STDLIB, which
+# Sys.__init_build() derives from the bindir of the julia running the bake --
+# the host one.  contrib/generate_precompile.jl hardcodes `@stdlib` for its
+# subprocesses too.  So the host prefix is what has to hold a usable stdlib
+# tree, including the sources its symlinks name.
+IOS_BAKE_STDLIB := $(JULIAHOME)/usr/share/julia/stdlib/$(VERSDIR)
 
 # Env vars pointing the host julia at its in-tree bindir / sysimage / depot.
 # When IOS_SYSIMAGE_EXTRA_PROJECT is set, activate that project and let the
@@ -117,12 +113,12 @@ IOS_STDLIB_PATH := $(build_datarootdir)/julia/stdlib/$(VERSDIR)
 # lock down to stdlib only, which is what the regular bake expects.
 ifneq ($(IOS_SYSIMAGE_EXTRA_PROJECT),)
 HOST_JULIA_ENV := JULIA_BINDIR=$(JULIAHOME)/usr/bin \
-                 JULIA_LOAD_PATH=@:$(IOS_STDLIB_PATH) \
+                 JULIA_LOAD_PATH=@:@stdlib \
                  JULIA_PROJECT=$(IOS_SYSIMAGE_EXTRA_PROJECT) \
                  JULIA_NUM_THREADS=1
 else
 HOST_JULIA_ENV := JULIA_BINDIR=$(JULIAHOME)/usr/bin \
-                 JULIA_LOAD_PATH=$(IOS_STDLIB_PATH) \
+                 JULIA_LOAD_PATH=@stdlib \
                  JULIA_PROJECT= \
                  JULIA_DEPOT_PATH=: \
                  JULIA_NUM_THREADS=1
@@ -209,16 +205,17 @@ fi
 endef
 
 # Recipe-time check that the stdlibs the bake loads are actually readable.
-# Their symlinks name sources outside this directory, so a link can survive
-# while its target does not -- a restored cache holding the install stamps
-# without the extracted trees does exactly that.  sysimg.jl would report it as
-# `Package SHA not found in current path`, which reads like a load-path
-# mistake; say what the directory really holds instead.
+# The entries there are symlinks naming sources elsewhere in the host tree, so
+# one can survive while its target does not -- an out-of-tree build extracts
+# into $(BUILDROOT)/stdlib and never creates what the host prefix points at.
+# sysimg.jl reports that as `Package SHA not found in current path`, which
+# reads like a load-path mistake; say what the directory really holds instead.
 define check_ios_stdlib
-@if [ ! -r "$(IOS_STDLIB_PATH)/SHA/src/SHA.jl" ]; then \
-    echo "ERROR: $(IOS_STDLIB_PATH) has no readable SHA stdlib." >&2; \
-    echo "       The bake loads its stdlibs from there; it currently holds:" >&2; \
-    ls -l "$(IOS_STDLIB_PATH)" >&2 2>/dev/null || echo "       (no such directory)" >&2; \
+@if [ ! -r "$(IOS_BAKE_STDLIB)/SHA/src/SHA.jl" ]; then \
+    echo "ERROR: $(IOS_BAKE_STDLIB) has no readable SHA stdlib." >&2; \
+    echo "       base/sysimg.jl loads the bake's stdlibs from there, via" >&2; \
+    echo "       @stdlib; it currently holds:" >&2; \
+    ls -l "$(IOS_BAKE_STDLIB)" >&2 2>/dev/null || echo "       (no such directory)" >&2; \
     exit 1; \
 fi
 endef
