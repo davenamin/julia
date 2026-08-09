@@ -1,17 +1,28 @@
 #!/usr/bin/env bash
 #
-# Fast structural checks for the iOS port.  No compiler, no Xcode, no Julia --
-# everything here runs in a couple of minutes on any machine with bash, git,
-# curl and patch, which is what makes it worth running before a build rather
-# than after one.
+# Structural checks for the iOS port, run before a build rather than after one.
+# An iOS cross-build takes about an hour, and most of what breaks it can be
+# established in seconds from the tree alone.
 #
-#   contrib/ios/ci-checks.sh            # everything that works offline + patches
+#   contrib/ios/ci-checks.sh            # everything, including patch checks
 #   contrib/ios/ci-checks.sh --offline  # skip the checks that fetch sources
 #
-# The patch checks are the reason this exists.  A fork-local patch is pinned to
-# one upstream revision, and the only way to know it still applies is to fetch
-# that revision and try.  A dependency bump that silently invalidates a patch
-# otherwise surfaces an hour into a build.
+# What is checked, and why each needs checking here:
+#
+#   Fork-local patches.  Each is pinned to one upstream revision, and the only
+#   way to know it still applies is to fetch that revision and try.
+#
+#   iOS-only code.  Regions behind `#if defined(_OS_IOS_)`, and everything in
+#   contrib/ios/, are compiled by no other build; a renamed runtime API there
+#   survives a rebase without a conflict.  Both are compiled here.
+#
+#   Fork-local copies of upstream constructs.  The iOS build spells out by
+#   hand what the ordinary build computes -- link archives, rule prerequisites
+#   -- and those copies are compared against the originals.
+#
+# Set IOS_CHECKS_REQUIRE_COMPILE=1 where the compile checks are known to be
+# supported, so an environment that loses the ability to run them fails rather
+# than skipping quietly.  The iOS SDK is never needed.
 
 set -uo pipefail
 
@@ -72,12 +83,11 @@ grep -q 'interpreter-ccall' src/Makefile \
     && pass "interpreter-ccall is in src/Makefile SRCS" \
     || fail "interpreter-ccall missing from src/Makefile SRCS"
 
-# julia-sysimg-ios-% is a fork-local copy of upstream's julia-sysimg-%, and a
-# prerequisite the release adds to the original does not appear in the copy.
-# 1.12 moved the compiler to a top-level Compiler/ that Base_compiler.jl
-# includes by path out of DATAROOT, reached through the symlink
-# TOP_LEVEL_PKG_LINK_TARGETS makes; without it the bake failed on a missing
-# Compiler.jl.  julia-cli-% is deliberately absent: julia-src-% requires it.
+# julia-sysimg-ios-% is a fork-local copy of upstream's julia-sysimg-%, so a
+# prerequisite added to the original will not appear in the copy.  Each stands
+# for something the bake reads: TOP_LEVEL_PKG_LINK_TARGETS, for instance,
+# makes the usr/share/julia/Compiler symlink that Base_compiler.jl includes by
+# path.  julia-cli-% is exempt -- julia-src-% requires it already.
 sysimg_prereqs() {
     sed -nE "s/^julia-sysimg-$1(release|-release) .*: julia-sysimg-$1% : (.*)/\2/p" Makefile \
         | head -1 | sed 's/|.*//'
@@ -99,9 +109,9 @@ fi
 
 # The iOS branch of src/Makefile spells RT_LLVMLINK out by hand, because
 # llvm-config is built for iOS and cannot run on the host to be asked.  That
-# hand-written list has to cover the same archives as RT_LLVM_LIBS, which the
-# ordinary path passes to llvm-config; when it did not, the host CPU detection
-# processor.cpp calls went undefined at link time, an hour into the build.
+# hand-written list must cover the same archives as RT_LLVM_LIBS, which the
+# ordinary path passes to llvm-config; an archive missing from it is a link
+# error against libjulia-internal.
 rt_libs=$(sed -nE 's/^RT_LLVM_LIBS[[:space:]]*:?=[[:space:]]*(.*)/\1/p' src/Makefile | head -1)
 ios_link=$(sed -n '/^ifeq ($(IOS), 1)/,/^endif # IOS/p' src/Makefile | grep -E '^RT_LLVMLINK')
 missing=""
@@ -128,11 +138,11 @@ else
     fail "libffi missing from DEP_LIBS or DEP_LIBS_STAGED_ALL in deps/Makefile"
 fi
 
-# Every `empty!(X_list)` this fork adds to a stdlib JLL has to have an `X_list`
-# to empty.  Upstream rewrites these files between releases -- 1.12's
-# p7zip_jll dropped both arrays -- and the hunk still merges cleanly onto the
-# unchanged `function __init__()` line, so the breakage only shows up as an
-# UndefVarError an hour into precompilation.
+# Every `empty!(X_list)` this fork adds to a stdlib JLL needs an `X_list` to
+# empty.  Upstream rewrites these files between releases and may drop an
+# array, while the hunk still merges cleanly onto the unchanged
+# `function __init__()` line; the result is an UndefVarError during stdlib
+# precompilation.
 jll_bad=""
 for d in stdlib/*_jll; do
     f="$d/src/$(basename "$d").jl"
@@ -152,12 +162,10 @@ else
     printf '%s' "$jll_bad"
 fi
 
-# A `goto` whose label does not exist in the same file.  Cheap, generic, and
-# it catches a specific rebase hazard: an iOS-only block written against one
-# release's version of a function, merged onto another's without conflict
-# because it sits in a region only this fork has.  Nothing outside an IOS=1
-# build compiles those blocks, so the error otherwise waits for the
-# cross-build.  Labels may be written `name:` or `name :`.
+# A `goto` whose label does not exist in the same file.  This catches an
+# iOS-only block written against one release's version of a function and
+# merged onto another's without conflict, since it sits in a region only this
+# fork has.  Labels may be written `name:` or `name :`.
 goto_bad=$(python3 - <<'GOTOPY' 2>&1
 import re, glob
 bad = []
@@ -179,10 +187,8 @@ fi
 
 # Runtime API names used only from iOS-only code.  Code inside `#if
 # defined(_OS_IOS_)` is compiled by no other build, so a name the runtime has
-# since renamed -- `jl_is_immutable_datatype` became
-# `jl_may_be_immutable_datatype` between 1.10 and 1.12 -- survives a rebase
-# without a conflict and fails an hour into the cross-build.  Resolving each
-# name against the headers costs a second and finds it here instead.
+# renamed since survives a rebase without a conflict.  Every jl_/JL_ name
+# reached from such a region is resolved against the headers.
 api_bad=$(python3 - <<'APIPY' 2>&1
 import re, glob
 
@@ -249,17 +255,16 @@ else
     printf '%s\n' "$api_bad"
 fi
 
-# Type-check the same regions for real.  `_OS_IOS_` is normally reachable only
-# on Apple platforms (support/platform.h defines it inside the Darwin branch),
-# but defining it directly compiles the iOS regions anywhere: the three headers
-# a build would generate are stubbed, and nothing here needs the iOS SDK.  That
-# turns an hour-long cross-build into a second, and unlike the name check above
-# it catches wrong argument counts and wrong types too.
+# Type-check the same regions for real, which also catches wrong argument
+# counts and wrong types.  `_OS_IOS_` is reachable only on Apple platforms --
+# support/platform.h defines it inside the Darwin branch -- but defining it
+# directly compiles the iOS regions anywhere: the three headers a build would
+# generate are stubbed, and no iOS SDK is involved.
 #
-# Each file is compiled twice.  Only a file that compiles *without* `_OS_IOS_`
-# can say anything: if the baseline already fails, this environment is missing
-# something the file needs -- an ARM host for processor_arm.cpp, a matching
-# LLVM for jitlayers.cpp -- and the file is skipped rather than blamed.
+# Each file is compiled twice.  A src/ file that fails even without
+# `_OS_IOS_` is one this environment cannot build at all -- processor_arm.cpp
+# wants an ARM host, jitlayers.cpp a matching LLVM -- and is skipped rather
+# than blamed.
 FFI_INC=""
 if [[ -f /usr/include/ffi.h ]]; then
     FFI_INC="/usr/include"
@@ -291,18 +296,16 @@ else
     : > "$gendir/jl_internal_funcs.inc"
     : > "$gendir/uprobes.h.gen"
 
-    # clang makes an implicit declaration an error; gcc only warns, which would
-    # let exactly the rename this check exists for through.
+    # clang makes an implicit declaration an error and gcc only warns, so ask
+    # for the error: a renamed function is otherwise just a warning here.
     cc_werror="-Werror=implicit-function-declaration -Werror=implicit-int"
     cc_werror="$cc_werror -Werror=incompatible-pointer-types -Werror=int-conversion"
     cc_inc="-D_GNU_SOURCE -I src -I src/support -I src/flisp -I contrib/ios -I $gendir"
     cc_inc="$cc_inc -I $(llvm-config --includedir) -I $FFI_INC"
 
-    # contrib/ios/*.c comes along unconditionally.  The embedding helper and
+    # contrib/ios/*.c comes along unconditionally: the embedding helper and
     # the simulator harness are compiled by an app target and by the simulator
-    # job and by nothing else, which is the same blind spot the `_OS_IOS_`
-    # regions have: jl_init_with_image's rename to jl_init_with_image_file sat
-    # there undetected until the harness build, an hour into the run.
+    # job and by nothing else, the same position the `_OS_IOS_` regions are in.
     judged=0
     for f in $(grep -lE '_OS_IOS_|JL_CCALL_FFI' src/*.c src/*.cpp 2>/dev/null) \
              contrib/ios/*.c; do
@@ -313,15 +316,11 @@ else
         esac
         # shellcheck disable=SC2086
         if ! base=$($comp -fsyntax-only $cc_werror $cc_inc "$f" 2>&1); then
-            # Say why.  A skip that does not name its cause reads as a pass and
-            # hides the fact that nothing was checked -- a missing libunwind-dev
-            # skipped all four files while the job reported success.
+            # Name the cause: a skip that does not is indistinguishable from
+            # a pass, and one missing header can skip every file at once.
             why=$(printf '%s\n' "$base" | awk '/error:/{sub(/.*error: /, ""); print; exit}')
-            # The skip is for a file this environment cannot build at all,
-            # which is a statement about src/: processor_arm.cpp wants an ARM
-            # host, jitlayers.cpp a matching LLVM.  contrib/ios/ is portable C
-            # with no such excuse, so a baseline failure there is the defect
-            # itself -- and skipping it would let CI stay green through one.
+            # contrib/ios/ is portable C, so it has no claim on the skip above
+            # -- a baseline failure there is the defect itself.
             case "$f" in
                 contrib/ios/*)
                     fail "$f does not compile: ${why:-unknown}"
@@ -375,19 +374,6 @@ if [[ -z "$unguarded" ]]; then
 else
     fail "signals-mach.c has unguarded private-API references"
     echo "$unguarded"
-fi
-
-# The simulator harness is compiled by CI against the framework, which needs
-# macOS; a syntax-only pass catches the ordinary mistakes anywhere.
-if command -v cc >/dev/null 2>&1; then
-    if out=$(cc -fsyntax-only -Wall -I contrib/ios contrib/ios/simulator-selftest.c 2>&1); then
-        pass "contrib/ios/simulator-selftest.c compiles"
-    else
-        fail "contrib/ios/simulator-selftest.c does not compile"
-        echo "$out" | sed 's/^/      /'
-    fi
-else
-    skip "simulator-selftest.c syntax check (no cc)"
 fi
 
 # ---------------------------------------------------------------------------

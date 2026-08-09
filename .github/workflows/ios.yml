@@ -26,12 +26,11 @@ name: iOS port
 #
 #   deps/srccache        Upstream tarballs.  The same key in every job -- they
 #                        fetch the same files, and an iOS build downloads a
-#                        superset of what a host build does.  The `v2` salt
-#                        discards caches written before jldownload learned to
-#                        delete a partial transfer: a truncated tarball in
-#                        srccache is sticky, because the download rule only
-#                        fires when the file is absent, so it would fail its
-#                        checksum on every subsequent run.  Spelled out at
+#                        superset of what a host build does.  A truncated
+#                        tarball here is sticky, since the download rule only
+#                        fires when the file is absent; jldownload deletes a
+#                        partial transfer to prevent that, and the `v2` salt
+#                        drops caches predating it.  The key is spelled out at
 #                        each use rather than hoisted into a workflow-level
 #                        `env`, where hashFiles() is not an allowed context
 #                        and silently yields a run with no jobs at all.
@@ -104,9 +103,9 @@ jobs:
           IOS_CHECKS_REQUIRE_COMPILE: 1
 
   # Everything in ci-checks.sh that needs macOS and the iOS SDK -- chiefly
-  # expanding sysimage-ios.mk, which cannot even parse elsewhere.  A separate
-  # job because it needs no build at all: as a trailing step of host-build it
-  # reported its answer forty minutes late.
+  # expanding sysimage-ios.mk, which cannot parse elsewhere.  Kept a separate
+  # job because it needs no build, and so answers in seconds alongside
+  # host-build rather than after it.
   macos-checks:
     name: macOS-only checks
     needs: checks
@@ -138,23 +137,21 @@ jobs:
           xcodebuild -version
           echo "MAKEFLAGS=-j$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
 
-      # JULIA_PRECOMPILE=0 skips generate_precompile.jl, a large fraction of
-      # the wall time that exercises nothing this fork changes.  The iOS bake
-      # does not want it either: it runs its own --compile=all pass.
+      # JULIA_PRECOMPILE=0 skips generate_precompile.jl for the host julia,
+      # a large fraction of the wall time that exercises nothing this fork
+      # changes.  It applies to this job only; the iOS bake runs its own
+      # precompile pass against the cross target (see sysimage-ios.mk).
       #
       # It does NOT skip `stdlibs-cache-release`, deliberately: precompiling
-      # every stdlib is what catches a JLL this fork has broken, which is how
-      # the p7zip_jll regression surfaced.
+      # every stdlib is what catches a JLL this fork has broken.
       #
       # The cost of keeping that phase is REPL's precompile workload, which is
       # flaky here for reasons unrelated to iOS.  It drives a fake PTY, types
       # expressions that raise on purpose, and greps the transcript for
       # "ERROR:" against a substring allow-list
-      # (stdlib/REPL/src/precompile.jl).  A short read truncates one of those
-      # deliberate errors past the point where the allow-list matches, and the
-      # workload calls exit(1).  Two runs here produced two different
-      # truncations -- `ERROR: BoundsError` and `ERROR: MethodError: ` -- both
-      # of them errors the workload itself scripts.
+      # (stdlib/REPL/src/precompile.jl).  A short read can truncate one of
+      # those deliberate errors past the point where the allow-list matches,
+      # and the workload then calls exit(1).
       #
       # So: retry, but only on that signature, and only a bounded number of
       # times.  `make` is incremental and the other 107 configurations stay

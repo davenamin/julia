@@ -420,25 +420,33 @@ what it finds; run it standalone any time with
 contrib/ios/check-host-paths.sh <output-dir>
 ```
 
-Two categories, treated differently:
+Four categories, only the first of which fails the check:
 
-- **Fixed.** The stdlib JLL stubs used to `append!` the build machine's
-  `<bindir>/../lib{,/julia}` into their `const LIBPATH_list`, which the
-  sysimage serializes; at startup the device `__init__` appended the real
-  paths *behind* the stale ones, so every `Cmd` a JLL built carried a
-  `DYLD_FALLBACK_LIBRARY_PATH` starting with the build host's prefix.
-  They now `empty!` the lists first (see any `stdlib/*_jll/src/*.jl`
-  `__init__`, and `base/linking.jl`).  Anything in this category that the
-  audit still reports is a real regression and fails the check.
-- **Inherent.** Julia records the absolute path of every stdlib source
+- **A path the runtime would open** — a JLL `LIBPATH`, an artifact or
+  depot directory, a dylib.  The stdlib JLL stubs are why this matters:
+  each `__init__` `empty!`s its `LIBPATH_list` and `PATH_list` before
+  appending the device paths, so the build machine's
+  `<bindir>/../lib{,/julia}` that the sysimage serialized cannot lead the
+  `DYLD_FALLBACK_LIBRARY_PATH` of a `Cmd` a JLL builds (see any
+  `stdlib/*_jll/src/*.jl` `__init__`, and `base/linking.jl`).  A hit here
+  is a real defect.
+- **Baked source paths.** Julia records the absolute path of every source
   file it bakes (`Method.file`, and `Sys.BUILD_STDLIB_PATH`), rewriting
   them to the runtime location only for *display*
   (`Base.fixup_stdlib_path`).  Those strings are in `JuliaSysimage` by
   construction and no init-time cleanup removes them.  To keep a username
   out of them, build from a directory that has none — e.g. clone and build
-  (host julia included) under `/opt/julia-ios` rather than `~/…` — then
-  re-run the audit to confirm.  Set `IOS_STRICT_PATH_AUDIT=1` to make the
-  check fail on these too once your build tree is neutral.
+  (host julia included) under `/opt/julia-ios` rather than `~/…`.
+- **A vendored dependency's own `--prefix`**, compiled into that
+  dependency's binary; OpenSSL's `OPENSSLDIR` and `ENGINESDIR` are the
+  usual ones.  Those directories cannot exist on a device and are not
+  consulted there.
+- **Strings merely shaped like paths** — a test fixture, or a docstring
+  quoting a `file:///C:/…` URL — reported so they are not mistaken for
+  leakage.
+
+Set `IOS_STRICT_PATH_AUDIT=1` to fail on all four once your build tree is
+neutral.
 
 ## Still verify per submission
 

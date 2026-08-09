@@ -20,13 +20,13 @@
 #   2. sysbase.ji       — host julia, platform-neutral IR, --compile=all.
 #   3. sys-o.a          — host julia with --output-o + --target=arm64-apple-iosX,
 #                          --compile=all.  Object archive of iOS arm64 Mach-O.
-#
-# Upstream sysimage.mk chains these through native dylibs; here every
-# intermediate stays a `.ji`, because a native link in this tree would be an
-# iOS one and the host julia has to load the image it just produced.
 #   4. sys.$(SHLIB_EXT) — link sys-o.a into sys.dylib using xcrun's iOS clang
 #                          and iOS SDK.  Lands in $(build_private_libdir) where
 #                          contrib/ios/Makefile install-libs picks it up.
+#
+# Upstream sysimage.mk chains stages 1-3 through native dylibs; here every
+# intermediate stays a `.ji`, because a native link in this tree would be an
+# iOS one and the host julia has to load the image it just produced.
 
 SRCDIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 BUILDDIR := .
@@ -48,7 +48,7 @@ all: sysimg-ios-release sysimg-ios-debug
 sysimg-ios-release: $(build_private_libdir)/sys.$(SHLIB_EXT)
 sysimg-ios-debug: $(build_private_libdir)/sys-debug.$(SHLIB_EXT)
 
-VERSDIR := v$(shell cut -d. -f1-2 < $(JULIAHOME)/VERSION)
+# VERSDIR (vX.Y) comes from stdlib/stdlib.mk, included above.
 
 IOS_TRIPLE := arm64-apple-ios$(IOS_VERSION_MIN)
 # Simulator slice needs the -simulator suffix on the triple so the LLVM

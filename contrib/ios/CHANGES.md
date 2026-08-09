@@ -31,9 +31,7 @@ code: the JIT works there, `fork`/`exec` succeed and the bundle is writable.
 
 Conventions for work on this branch:
 
-- One topical commit per change, and each commit builds on its own.
-- History is not rewritten once pushed, so a later fix is its own commit
-  rather than a fold-in.
+- One topical commit per change, each buildable on its own.
 - Comments describe the design as it stands and why it is that way, without
   narrating the change that produced it.
 
@@ -46,9 +44,12 @@ Conventions for work on this branch:
 | `contrib/ios/julia_ios_init.{c,h}` | Embedding helper for the app target: sets `JULIA_BINDIR`/depot/load-path, locates the sysimage, calls `jl_init_with_image_file`. |
 | `contrib/ios/sysimage_env_init.jl` | Preamble for the sysimage bake — re-runs the loading init and module `__init__`s that `--output-o` mode skips. |
 | `contrib/ios/check-host-paths.sh` | Audits shipped artifacts for build-machine absolute paths. |
+| `contrib/ios/ci-checks.sh` | Structural checks: patch application, iOS-only compiles, fork-vs-upstream drift. |
+| `contrib/ios/simulator-selftest.c` | Command-line embedder run under `simctl spawn`; drives the ccall interpreter and BLAS report. |
 | `contrib/ios/test-gzip-inflate.jl` | Compares Pkg's in-process gzip path against the `7z` path. |
 | `contrib/ios/test-accelerate.jl` | Compares the Accelerate and OpenBLAS backends, and reports Accelerate's LAPACK coverage. |
 | `contrib/ios/APPSTORE.md` | Submission notes: frameworks layout, privacy manifests, export compliance, GPL, BLAS. |
+| `.github/workflows/ios.yml` | CI pipeline: structural checks, host build, then the device and simulator slices. |
 | `sysimage-ios.mk` | Cross-targeted sysimage bake: host julia emits an iOS arm64 object via `--target`, then links it with the iOS SDK. |
 | `stdlib/patches/Pkg-spawn-free-gzip.patch` | Applied to the vendored Pkg checkout at extraction (see below). |
 | `deps/libffi.mk`, `deps/libffi.version` | libffi, built for iOS only — the interpreter makes foreign calls through it. |

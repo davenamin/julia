@@ -17,19 +17,21 @@
 # additional absolute prefixes to search for; by default the script looks for
 # $HOME, $JULIA_SRC (when set) and the generic "/Users/<name>/" shape.
 #
-# Exit status:
-#   0  no hits, or hits only in the known-inherent category (see below) and
-#      IOS_STRICT_PATH_AUDIT is unset
-#   1  hits that are not in the known-inherent category, or any hit at all
-#      when IOS_STRICT_PATH_AUDIT=1
+# Hits are sorted into four categories, described where they are computed
+# below.  Three are reported and tolerated -- baked source paths, a vendored
+# dependency's own --prefix, and strings merely shaped like paths -- and the
+# fourth, a path the runtime would try to open, is a failure.
 #
-# Known-inherent category: Julia records the absolute path of every stdlib
-# source file it bakes (`Method.file`, plus `Sys.BUILD_STDLIB_PATH`), and
-# rewrites them to the *runtime* stdlib location only when displaying them —
-# see `Base.fixup_stdlib_path` in base/methodshow.jl.  Those strings are
-# therefore in JuliaSysimage by construction, and no amount of init-time
-# cleanup removes them.  The only way to keep a username out of them is to
-# build from a directory that has no username in its path, e.g.
+# Exit status:
+#   0  no hits, or only tolerated ones and IOS_STRICT_PATH_AUDIT is unset
+#   1  a path the runtime would open, or any hit at all when
+#      IOS_STRICT_PATH_AUDIT=1
+#
+# Baked source paths are unavoidable in place: Julia records the absolute path
+# of every source file it bakes (`Method.file`, plus `Sys.BUILD_STDLIB_PATH`)
+# and rewrites them to the runtime stdlib location only when displaying them,
+# in `Base.fixup_stdlib_path` (base/methodshow.jl).  The way to keep a
+# username out of them is to build from a directory that has none, e.g.
 #
 #     sudo mkdir -p /opt/julia-ios && sudo chown "$USER" /opt/julia-ios
 #     git clone <this repo> /opt/julia-ios/julia
@@ -131,7 +133,7 @@ fi
 # Classify on the leaked path (field 2), never on the file it was found in —
 # every hit in the resources tree lives under .../share/julia/stdlib/vX.Y/.
 #
-# Three kinds, only one of which is a defect:
+# Four kinds, only the last of which is a defect:
 #
 #  * Not this machine's at all.  The generic "/Users/" net also catches string
 #    literals shaped like paths -- a Pkg test fixture naming /Users/test, a
@@ -140,10 +142,12 @@ fi
 #    reported and otherwise ignored.
 #  * Inherent.  Julia records the absolute path of every source file it bakes,
 #    so each one shows up as a string: stdlib sources, the top-level Compiler
-#    that 1.12 moved to share/julia/Compiler, and the base files generated into
-#    the build directory (build_h.jl and friends).  Any `.jl` under the build
-#    tree is one of these.  The build root on its own is the same thing with
-#    nothing appended.
+#    under share/julia/Compiler, and the base files generated into the build
+#    directory (build_h.jl and friends).  Any `.jl` under the build tree is one
+#    of these.  The build root on its own is the same thing with nothing
+#    appended.
+#  * A vendored dependency's own --prefix, kept in its own binary; classified
+#    where that test is defined below.
 #  * Everything else, which is the interesting case: a path with a component
 #    after it that is not a source file is something the runtime would try to
 #    *open* -- a JLL LIBPATH, an artifact or depot directory, a dylib.
@@ -199,11 +203,10 @@ done <<< "$REST"
 
 status=0
 
-# Everything below writes through `head`: the full list runs to hundreds of
-# lines, and a burst that size onto a non-blocking stdout -- which is what CI
-# hands the script -- fails the write with EAGAIN partway through.
-# awk rather than `head`, which closes the pipe on the builtin printf feeding
-# it and turns the report itself into `printf: write error: Broken pipe`.
+# Each list runs to hundreds of lines, and writing that many at once to the
+# non-blocking stdout a CI runner supplies fails with EAGAIN, so only the
+# first few are printed.  awk does the limiting rather than `head`, which
+# would close the pipe on the builtin printf feeding it.
 report() { # $1 = list, $2 = how many to show
     printf '%s\n' "$1" | awk -v n="$2" '
         NR <= n { print "    " $0 }
