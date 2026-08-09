@@ -208,6 +208,21 @@ define check_host_julia
 fi
 endef
 
+# Recipe-time check that the stdlibs the bake loads are actually readable.
+# Their symlinks name sources outside this directory, so a link can survive
+# while its target does not -- a restored cache holding the install stamps
+# without the extracted trees does exactly that.  sysimg.jl would report it as
+# `Package SHA not found in current path`, which reads like a load-path
+# mistake; say what the directory really holds instead.
+define check_ios_stdlib
+@if [ ! -r "$(IOS_STDLIB_PATH)/SHA/src/SHA.jl" ]; then \
+    echo "ERROR: $(IOS_STDLIB_PATH) has no readable SHA stdlib." >&2; \
+    echo "       The bake loads its stdlibs from there; it currently holds:" >&2; \
+    ls -l "$(IOS_STDLIB_PATH)" >&2 2>/dev/null || echo "       (no such directory)" >&2; \
+    exit 1; \
+fi
+endef
+
 # Stage 1: basecompiler.ji — platform-neutral IR for the core compiler.
 $(build_private_libdir)/basecompiler.ji: $(COMPILER_SRCS)
 	$(call check_host_julia)
@@ -222,6 +237,7 @@ $(build_private_libdir)/basecompiler.ji: $(COMPILER_SRCS)
 # method lowering so stage 3's --output-o has every method to emit.
 $(build_private_libdir)/sysbase.ji: $(build_private_libdir)/basecompiler.ji $(JULIAHOME)/VERSION $(BASE_SRCS) $(STDLIB_SRCS)
 	$(call check_host_julia)
+	$(call check_ios_stdlib)
 	@$(call PRINT_JULIA, cd $(JULIAHOME)/base && \
 	if ! $(HOST_JULIA_ENV) $(HOST_JULIA) -g1 -O0 -C $(JULIA_CPU_TARGET) $(HEAPLIM) \
 			--compile=all \
