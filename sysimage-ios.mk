@@ -98,18 +98,31 @@ IOS_SYSIMAGE_EXTRA_JL ?=
 # package works on iOS.
 IOS_SYSIMAGE_EXTRA_PROJECT ?=
 
+# The stdlibs this bake loads, named as a path rather than left to `@stdlib`.
+# `@stdlib` resolves through Sys.STDLIB, which Sys.__init_build() derives from
+# the running julia's bindir -- the host prefix, since the host julia is what
+# runs the bake.  In an out-of-tree build that is the wrong tree twice over:
+# its stdlib entries are symlinks into $(JULIAHOME)/stdlib, and stdlib/Makefile
+# extracts an external stdlib under $(BUILDROOT)/stdlib instead, so nothing
+# ever creates what they point at and `using SHA` fails with "Package SHA not
+# found in current path".  This build's own directory is populated by
+# julia-stdlib and holds the very sources STDLIB_SRCS lists, which is what the
+# bake should be reading.  A directory in LOAD_PATH is a package-directory
+# environment, exactly what `@stdlib` expands to.
+IOS_STDLIB_PATH := $(build_datarootdir)/julia/stdlib/$(VERSDIR)
+
 # Env vars pointing the host julia at its in-tree bindir / sysimage / depot.
 # When IOS_SYSIMAGE_EXTRA_PROJECT is set, activate that project and let the
 # host's default depot be visible (so installed packages resolve); otherwise
 # lock down to stdlib only, which is what the regular bake expects.
 ifneq ($(IOS_SYSIMAGE_EXTRA_PROJECT),)
 HOST_JULIA_ENV := JULIA_BINDIR=$(JULIAHOME)/usr/bin \
-                 JULIA_LOAD_PATH=@:@stdlib \
+                 JULIA_LOAD_PATH=@:$(IOS_STDLIB_PATH) \
                  JULIA_PROJECT=$(IOS_SYSIMAGE_EXTRA_PROJECT) \
                  JULIA_NUM_THREADS=1
 else
 HOST_JULIA_ENV := JULIA_BINDIR=$(JULIAHOME)/usr/bin \
-                 JULIA_LOAD_PATH=@stdlib \
+                 JULIA_LOAD_PATH=$(IOS_STDLIB_PATH) \
                  JULIA_PROJECT= \
                  JULIA_DEPOT_PATH=: \
                  JULIA_NUM_THREADS=1
