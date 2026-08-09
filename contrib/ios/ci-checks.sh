@@ -132,6 +132,78 @@ else
     printf '%s\n' "$goto_bad"
 fi
 
+# Runtime API names used only from iOS-only code.  Code inside `#if
+# defined(_OS_IOS_)` is compiled by no other build, so a name the runtime has
+# since renamed -- `jl_is_immutable_datatype` became
+# `jl_may_be_immutable_datatype` between 1.10 and 1.12 -- survives a rebase
+# without a conflict and fails an hour into the cross-build.  Resolving each
+# name against the headers costs a second and finds it here instead.
+api_bad=$(python3 - <<'APIPY' 2>&1
+import re, glob
+
+def strip_comments(s):
+    # Blank out comments and string literals, keeping line structure so the
+    # preprocessor scan below still sees the right lines.
+    def blank(m):
+        return re.sub(r"[^\n]", " ", m.group(0))
+    return re.sub(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\\n])*"', blank, s, flags=re.S)
+
+declared = set()
+for h in glob.glob("src/*.h") + glob.glob("src/support/*.h"):
+    declared.update(re.findall(r"\b(?:jl|JL)_\w+", open(h, errors="ignore").read()))
+
+IOS_COND = re.compile(r"_OS_IOS_|JL_CCALL_FFI")
+NEGATED = re.compile(r"!\s*(?:defined\s*\(\s*)?(?:_OS_IOS_|JL_CCALL_FFI)")
+
+bad = []
+for f in sorted(glob.glob("src/*.c") + glob.glob("src/*.cpp")):
+    src = strip_comments(open(f, errors="ignore").read())
+    if not IOS_COND.search(src):
+        continue
+    # Names this file defines itself: macros, file-scope functions, typedefs.
+    local = set(re.findall(r"^\s*#\s*define\s+(\w+)", src, re.M))
+    local.update(re.findall(r"^\}\s*(\w+);", src, re.M))
+    local.update(re.findall(r"^\s*static\s+[^;()]*?\b(\w+)\s*\(", src, re.M))
+    local.update(re.findall(r"^\w[\w \t\*]*?\b(\w+)\s*\([^;]*$", src, re.M))
+
+    # One frame per open #if, as (condition names iOS, this branch is iOS-only).
+    # The first is kept so that `#else` can invert -- the body guarded by
+    # `#if !JL_CCALL_FFI ... #else` is the iOS one.
+    def branch(kw, rest):
+        names = bool(IOS_COND.search(rest))
+        negated = bool(NEGATED.search(rest)) or kw == "ifndef"
+        return names, names and not negated
+
+    stack = []
+    for n, line in enumerate(src.split("\n"), 1):
+        d = re.match(r"\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)", line)
+        if d:
+            kw, rest = d.group(1), d.group(2)
+            if kw in ("if", "ifdef", "ifndef"):
+                stack.append(branch(kw, rest))
+            elif kw == "elif" and stack:
+                stack[-1] = branch(kw, rest)
+            elif kw == "else" and stack:
+                names, is_ios = stack[-1]
+                stack[-1] = (names, names and not is_ios)
+            elif kw == "endif" and stack:
+                stack.pop()
+            continue
+        if not any(is_ios for _, is_ios in stack):
+            continue
+        for name in re.findall(r"\b(?:jl|JL)_\w+", line):
+            if name not in declared and name not in local:
+                bad.append("      %s:%d: %s is not declared in any src header" % (f, n, name))
+print("\n".join(sorted(set(bad))))
+APIPY
+)
+if [[ -z "$api_bad" ]]; then
+    pass "every jl_/JL_ name used from iOS-only code resolves in the headers"
+else
+    fail "iOS-only code names a runtime API that does not exist"
+    printf '%s\n' "$api_bad"
+fi
+
 # App Store validation rejects a binary that references private symbols, so
 # every keymgr/dyld-atfork call has to sit inside a !TARGET_OS_IPHONE guard.
 unguarded=$(python3 - <<'PY'
