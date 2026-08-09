@@ -72,6 +72,26 @@ grep -q 'interpreter-ccall' src/Makefile \
     && pass "interpreter-ccall is in src/Makefile SRCS" \
     || fail "interpreter-ccall missing from src/Makefile SRCS"
 
+# The iOS branch of src/Makefile spells RT_LLVMLINK out by hand, because
+# llvm-config is built for iOS and cannot run on the host to be asked.  That
+# hand-written list has to cover the same archives as RT_LLVM_LIBS, which the
+# ordinary path passes to llvm-config; when it did not, the host CPU detection
+# processor.cpp calls went undefined at link time, an hour into the build.
+rt_libs=$(sed -nE 's/^RT_LLVM_LIBS[[:space:]]*:?=[[:space:]]*(.*)/\1/p' src/Makefile | head -1)
+ios_link=$(sed -n '/^ifeq ($(IOS), 1)/,/^endif # IOS/p' src/Makefile | grep -E '^RT_LLVMLINK')
+missing=""
+for lib in $rt_libs; do
+    # `support` names libLLVMSupport, `targetparser` libLLVMTargetParser.
+    grep -qiE -- "-lLLVM$lib([^A-Za-z]|$)" <<<"$ios_link" || missing="$missing $lib"
+done
+if [[ -z "$rt_libs" ]]; then
+    fail "could not read RT_LLVM_LIBS from src/Makefile"
+elif [[ -z "$missing" ]]; then
+    pass "the iOS RT_LLVMLINK covers every RT_LLVM_LIBS archive ($rt_libs)"
+else
+    fail "the iOS RT_LLVMLINK is missing:$missing"
+fi
+
 # libffi has to be in DEP_LIBS (so it builds) *and* DEP_LIBS_STAGED_ALL (so
 # `version-check-libffi` and the uninstall rules exist); missing the second
 # fails the build with "No rule to make target 'version-check-libffi'".
