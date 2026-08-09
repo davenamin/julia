@@ -91,7 +91,7 @@ static int ccall_boxed(jl_value_t *ty) JL_NOTSAFEPOINT
     if (!jl_is_datatype(ty))
         return 1;                       // Union, UnionAll, abstract: always boxed
     jl_datatype_t *dt = (jl_datatype_t*)ty;
-    if (!jl_is_immutable_datatype(ty) || !dt->isconcretetype)
+    if (!jl_is_immutable(ty) || !dt->isconcretetype)
         return 1;
     return dt->layout != NULL && jl_is_layout_opaque(dt->layout);
 }
