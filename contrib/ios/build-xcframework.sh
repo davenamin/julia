@@ -402,7 +402,10 @@ package_runtime_resources
 # ships.  Advisory by default (the baked stdlib source paths are inherent —
 # see check-host-paths.sh); set IOS_STRICT_PATH_AUDIT=1 to fail on those too.
 echo
-"$SCRIPT_DIR/check-host-paths.sh" "$OUTPUT_DIR" || {
+# $JULIA_SRC is assigned here rather than inherited, so name it explicitly:
+# the audit treats a bare build root as provenance rather than a lookup, and
+# it can only do that for roots it has been told about.
+"$SCRIPT_DIR/check-host-paths.sh" "$OUTPUT_DIR" "$JULIA_SRC" || {
     echo
     echo "WARNING: the audit above found build-host paths in the shipped" >&2
     echo "         artifacts.  See contrib/ios/check-host-paths.sh." >&2
@@ -411,8 +414,9 @@ echo
 echo
 echo "==> Done."
 echo "    XCFrameworks:    $XCFW_DIR ($(ls -d "$XCFW_DIR"/*.xcframework 2>/dev/null | wc -l | tr -d ' ') total)"
-echo "    Device slice:    $DEVICE_FWKS"
-echo "    Simulator slice: $SIM_FWKS"
+for slice in $SLICES; do
+    printf '    %-17s%s\n' "$slice:" "$(slice_builddir "$slice")/install/Frameworks"
+done
 echo "    Resources:       $OUTPUT_DIR/julia-runtime-resources"
 echo
 echo "    Embed & Sign EVERY xcframework under xcframeworks/ in the app"
