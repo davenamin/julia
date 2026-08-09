@@ -295,11 +295,18 @@ else
     # let exactly the rename this check exists for through.
     cc_werror="-Werror=implicit-function-declaration -Werror=implicit-int"
     cc_werror="$cc_werror -Werror=incompatible-pointer-types -Werror=int-conversion"
-    cc_inc="-D_GNU_SOURCE -I src -I src/support -I src/flisp -I $gendir"
+    cc_inc="-D_GNU_SOURCE -I src -I src/support -I src/flisp -I contrib/ios -I $gendir"
     cc_inc="$cc_inc -I $(llvm-config --includedir) -I $FFI_INC"
 
+    # contrib/ios/*.c comes along unconditionally.  The embedding helper and
+    # the simulator harness are compiled by an app target and by the simulator
+    # job and by nothing else, which is the same blind spot the `_OS_IOS_`
+    # regions have: jl_init_with_image's rename to jl_init_with_image_file sat
+    # there undetected until the harness build, an hour into the run.
     judged=0
-    for f in $(grep -lE '_OS_IOS_|JL_CCALL_FFI' src/*.c src/*.cpp 2>/dev/null); do
+    for f in $(grep -lE '_OS_IOS_|JL_CCALL_FFI' src/*.c src/*.cpp 2>/dev/null) \
+             contrib/ios/*.c; do
+        [[ -f "$f" ]] || continue
         case "$f" in
             *.cpp) comp="${CXX:-c++} -std=c++17" ;;
             *)     comp="${CC:-cc}" ;;
@@ -310,6 +317,17 @@ else
             # hides the fact that nothing was checked -- a missing libunwind-dev
             # skipped all four files while the job reported success.
             why=$(printf '%s\n' "$base" | awk '/error:/{sub(/.*error: /, ""); print; exit}')
+            # The skip is for a file this environment cannot build at all,
+            # which is a statement about src/: processor_arm.cpp wants an ARM
+            # host, jitlayers.cpp a matching LLVM.  contrib/ios/ is portable C
+            # with no such excuse, so a baseline failure there is the defect
+            # itself -- and skipping it would let CI stay green through one.
+            case "$f" in
+                contrib/ios/*)
+                    fail "$f does not compile: ${why:-unknown}"
+                    printf '%s\n' "$base" | grep -m 5 -E "error:" | sed 's/^/      /'
+                    continue ;;
+            esac
             skip "$f (does not compile here without _OS_IOS_ either: ${why:-unknown})"
             continue
         fi
