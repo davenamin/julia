@@ -137,8 +137,11 @@ julia-debug julia-release : julia-% : julia-src-% julia-symlink
 # but invokes $(HOST_JULIA) for the bake stages and cross-emits via --target.
 # Depends on julia-stdlib + julia-base so that $(BUILDROOT)/base/build_h.jl
 # and $(BUILDROOT)/usr/share/julia/stdlib/ exist before the host julia tries
-# to load them during the sysbase.ji bake.
-julia-sysimg-ios-release julia-sysimg-ios-debug : julia-sysimg-ios-% : julia-stdlib julia-base julia-src-% | $(build_private_libdir)
+# to load them during the sysbase.ji bake, and on the top-level package links
+# for $(BUILDROOT)/usr/share/julia/Compiler, which Base_compiler.jl includes
+# by path off DATAROOT in the basecompiler.ji stage before that.
+# julia-cli-% is left to julia-src-%, which already requires it.
+julia-sysimg-ios-release julia-sysimg-ios-debug : julia-sysimg-ios-% : julia-stdlib julia-base julia-src-% $(TOP_LEVEL_PKG_LINK_TARGETS) | $(build_private_libdir)
 	@$(MAKE) $(QUIET_MAKE) -C $(BUILDROOT) -f $(JULIAHOME)/sysimage-ios.mk sysimg-ios-$*
 else
 julia-debug julia-release : julia-% : julia-sysimg-% julia-src-% julia-symlink julia-libccalltest \
