@@ -190,11 +190,15 @@ ifeq ($(IOS), 1)
 LLVM_LDFLAGS := -L$(build_libdir)
 LLVM_CXXFLAGS := -I$(build_includedir) -std=c++17 -fno-exceptions -fno-rtti \
     -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -DNDEBUG
-# Static LLVM libraries for libjulia-internal
-# (APInt-C, coverage, processor, runtime_ccall, gc-heap-snapshot use LLVMSupport)
-# In LLVM 15, Triple/host-detection symbols still live in LLVMSupport; the
-# separate LLVMTargetParser archive only exists from LLVM 16 onwards.
-RT_LLVMLINK := $(LLVM_LDFLAGS) -lLLVMSupport -lLLVMDemangle -lz
+# Static LLVM libraries for libjulia-internal (APInt-C, coverage, processor,
+# runtime_ccall and gc-heap-snapshot need them).  This must cover the same
+# ground as RT_LLVM_LIBS above, which the non-iOS path hands to llvm-config:
+# host CPU detection -- getHostCPUName and getHostCPUFeatures, reached from
+# processor.cpp -- lives in LLVMTargetParser from LLVM 16 onwards, and naming
+# only LLVMSupport leaves both undefined at link time.  The order is the one
+# `llvm-config --libs --link-static` emits: TargetParser needs Support, which
+# needs Demangle.
+RT_LLVMLINK := $(LLVM_LDFLAGS) -lLLVMTargetParser -lLLVMSupport -lLLVMDemangle -lz
 # Shared LLVM library for libjulia-codegen
 CG_LLVMLINK := $(LLVM_LDFLAGS) -lLLVM
 # libffi, for interpreter-ccall.c.  Static and folded into libjulia-internal:
