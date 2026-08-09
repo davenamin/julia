@@ -94,8 +94,12 @@ jobs:
       # Lets ci-checks.sh compile the iOS-only regions of src/ here rather than
       # leaving them to the cross-build; it skips that check without these.
       - name: Install the headers the iOS-only compile check needs
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq llvm-dev libffi-dev
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq llvm-dev libffi-dev libunwind-dev
       - run: contrib/ios/ci-checks.sh
+        env:
+          # These runners have the headers, so a file that cannot be compiled
+          # here is a regression in the check rather than a thin environment.
+          IOS_CHECKS_REQUIRE_COMPILE: 1
 
   # Everything in ci-checks.sh that needs macOS and the iOS SDK -- chiefly
   # expanding sysimage-ios.mk, which cannot even parse elsewhere.  A separate

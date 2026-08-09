@@ -253,16 +253,22 @@ else
     cc_inc="-D_GNU_SOURCE -I src -I src/support -I src/flisp -I $gendir"
     cc_inc="$cc_inc -I $(llvm-config --includedir) -I $FFI_INC"
 
+    judged=0
     for f in $(grep -lE '_OS_IOS_|JL_CCALL_FFI' src/*.c src/*.cpp 2>/dev/null); do
         case "$f" in
             *.cpp) comp="${CXX:-c++} -std=c++17" ;;
             *)     comp="${CC:-cc}" ;;
         esac
         # shellcheck disable=SC2086
-        if ! $comp -fsyntax-only $cc_werror $cc_inc "$f" >/dev/null 2>&1; then
-            skip "$f (does not compile here without _OS_IOS_ either)"
+        if ! base=$($comp -fsyntax-only $cc_werror $cc_inc "$f" 2>&1); then
+            # Say why.  A skip that does not name its cause reads as a pass and
+            # hides the fact that nothing was checked -- a missing libunwind-dev
+            # skipped all four files while the job reported success.
+            why=$(echo "$base" | grep -E "error:" | head -1 | sed 's/^.*error: //')
+            skip "$f (does not compile here without _OS_IOS_ either: ${why:-unknown})"
             continue
         fi
+        judged=$((judged + 1))
         # shellcheck disable=SC2086
         if out=$($comp -fsyntax-only -D_OS_IOS_ $cc_werror $cc_inc "$f" 2>&1); then
             pass "$f compiles with _OS_IOS_"
@@ -271,6 +277,13 @@ else
             echo "$out" | grep -E "error:" | head -10 | sed 's/^/      /'
         fi
     done
+    # A run where every file skipped checked nothing, which is the one outcome
+    # that must not look like a pass.  CI sets this to say the environment is
+    # supposed to support the check, so a regression in it is a failure rather
+    # than a quiet skip; elsewhere the skips above are explanation enough.
+    if [[ "$judged" == 0 && -n "${IOS_CHECKS_REQUIRE_COMPILE:-}" ]]; then
+        fail "no file could be compiled, so the iOS-only code went unchecked"
+    fi
     rm -rf "$gendir"
     trap - EXIT
 fi
