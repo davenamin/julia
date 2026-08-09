@@ -427,7 +427,10 @@ jobs:
           file "$sys"
           lipo -archs "$sys" | grep -qx arm64 || { echo "not arm64"; exit 1; }
           vtool -show-build-version "$sys" | tee /tmp/vtool.txt
-          grep -q 'platform iOS' /tmp/vtool.txt \
+          # vtool spells it IOS, and IOSSIMULATOR for the other slice, so match
+          # case-insensitively but require the word to end there -- a simulator
+          # build must not satisfy the device job.
+          grep -qiE 'platform[[:space:]]+ios[[:space:]]*$' /tmp/vtool.txt \
             || { echo "sys.dylib is not built for iOS"; exit 1; }
 
       - uses: actions/upload-artifact@v4
