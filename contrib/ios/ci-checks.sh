@@ -264,7 +264,7 @@ else
             # Say why.  A skip that does not name its cause reads as a pass and
             # hides the fact that nothing was checked -- a missing libunwind-dev
             # skipped all four files while the job reported success.
-            why=$(echo "$base" | grep -E "error:" | head -1 | sed 's/^.*error: //')
+            why=$(printf '%s\n' "$base" | awk '/error:/{sub(/.*error: /, ""); print; exit}')
             skip "$f (does not compile here without _OS_IOS_ either: ${why:-unknown})"
             continue
         fi
@@ -274,7 +274,7 @@ else
             pass "$f compiles with _OS_IOS_"
         else
             fail "$f does not compile with _OS_IOS_"
-            echo "$out" | grep -E "error:" | head -10 | sed 's/^/      /'
+            printf '%s\n' "$out" | grep -m 10 -E "error:" | sed 's/^/      /'
         fi
     done
     # A run where every file skipped checked nothing, which is the one outcome
