@@ -208,6 +208,7 @@ $(build_private_libdir)/basecompiler.ji: $(COMPILER_SRCS)
 # Stage 2: sysbase.ji — full sysimage IR, with --compile=all forcing eager
 # method lowering so stage 3's --output-o has every method to emit.
 $(build_private_libdir)/sysbase.ji: $(build_private_libdir)/basecompiler.ji $(JULIAHOME)/VERSION $(BASE_SRCS) $(STDLIB_SRCS)
+	$(call check_host_julia)
 	@$(call PRINT_JULIA, cd $(JULIAHOME)/base && \
 	if ! $(HOST_JULIA_ENV) $(HOST_JULIA) -g1 -O0 -C $(JULIA_CPU_TARGET) $(HEAPLIM) \
 			--compile=all \
@@ -226,6 +227,7 @@ $(build_private_libdir)/sysbase.ji: $(build_private_libdir)/basecompiler.ji $(JU
 # --compile=all — so the link is pure overhead.
 define sysimg_ios_builder
 $$(build_private_libdir)/sys$1-o.a : $$(build_private_libdir)/sysbase.ji $$(JULIAHOME)/contrib/generate_precompile.jl $$(JULIAHOME)/contrib/ios/sysimage_env_init.jl
+	$$(call check_host_julia)
 	@$$(call PRINT_JULIA, cd $$(JULIAHOME)/base && \
 	if ! $(HOST_JULIA_ENV) $(HOST_JULIA) $2 -C $(JULIA_CPU_TARGET) $$(HEAPLIM) \
 			--compile=all \
