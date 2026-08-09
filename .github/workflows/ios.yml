@@ -268,9 +268,27 @@ jobs:
       # `make` would rebuild everything it just restored.  The cache key
       # already covers every input the dependency build reads, so marking the
       # prefix current is sound rather than a way to hide staleness.
+      # `! -type l` is not a detail: touch follows a symlink, and a dangling
+      # one gets its target created as an empty file.  usr/ is full of links
+      # pointing outside itself.
       - name: Mark the restored dependency prefix current
         if: steps.iosdeps.outputs.cache-hit == 'true'
-        run: find build-ios-sim/usr -exec touch {} +
+        run: find build-ios-sim/usr ! -type l -exec touch {} +
+
+      # usr/ collects the stdlib install state as well as the dependency
+      # prefix: a stamp per stdlib under usr/manifest/vX.Y and a link under
+      # usr/share/julia/stdlib/vX.Y naming the extracted source in
+      # build-ios-sim/stdlib, which is outside the cache.  Restored together
+      # they tell make the stdlibs are installed while every link dangles, and
+      # the bake stops at `Package SHA not found in current path`.  Dropping
+      # the stamps re-extracts and re-links against this checkout, which is
+      # untarring a few tens of MB, not rebuilding the dependencies.
+      - name: Re-install the stdlibs over the restored prefix
+        if: steps.iosdeps.outputs.cache-hit == 'true'
+        run: |
+          v="v$(cut -d. -f1-2 < VERSION)"
+          rm -rf "build-ios-sim/usr/manifest/$v" \
+                 "build-ios-sim/usr/share/julia/stdlib/$v"
 
       - name: Build the simulator slice
         env:
@@ -377,9 +395,18 @@ jobs:
           tar -xzf "$RUNNER_TEMP/host-usr.tar.gz"
           ./usr/bin/julia -e 'println("host julia restored: ", VERSION)'
 
+      # See the simulator job for why symlinks are skipped and why the stdlib
+      # install state cannot come out of the cache with the rest of usr/.
       - name: Mark the restored dependency prefix current
         if: steps.iosdeps.outputs.cache-hit == 'true'
-        run: find build-ios-device/usr -exec touch {} +
+        run: find build-ios-device/usr ! -type l -exec touch {} +
+
+      - name: Re-install the stdlibs over the restored prefix
+        if: steps.iosdeps.outputs.cache-hit == 'true'
+        run: |
+          v="v$(cut -d. -f1-2 < VERSION)"
+          rm -rf "build-ios-device/usr/manifest/$v" \
+                 "build-ios-device/usr/share/julia/stdlib/$v"
 
       - name: Build the device slice
         env:
