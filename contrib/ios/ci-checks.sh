@@ -107,6 +107,31 @@ else
     printf '%s' "$jll_bad"
 fi
 
+# A `goto` whose label does not exist in the same file.  Cheap, generic, and
+# it catches a specific rebase hazard: an iOS-only block written against one
+# release's version of a function, merged onto another's without conflict
+# because it sits in a region only this fork has.  Nothing outside an IOS=1
+# build compiles those blocks, so the error otherwise waits for the
+# cross-build.  Labels may be written `name:` or `name :`.
+goto_bad=$(python3 - <<'GOTOPY' 2>&1
+import re, glob
+bad = []
+for f in sorted(glob.glob("src/*.c") + glob.glob("src/*.cpp")):
+    s = open(f, errors="ignore").read()
+    labels = set(re.findall(r'^\s*([A-Za-z_]\w*)\s*:(?!:)', s, re.M))
+    for m in re.finditer(r'\bgoto\s+([A-Za-z_]\w*)\s*;', s):
+        if m.group(1) not in labels:
+            bad.append("      %s: goto %s has no label in this file" % (f, m.group(1)))
+print("\n".join(sorted(set(bad))))
+GOTOPY
+)
+if [[ -z "$goto_bad" ]]; then
+    pass "every goto in src/ resolves to a label in the same file"
+else
+    fail "a goto names a label that does not exist"
+    printf '%s\n' "$goto_bad"
+fi
+
 # App Store validation rejects a binary that references private symbols, so
 # every keymgr/dyld-atfork call has to sit inside a !TARGET_OS_IPHONE guard.
 unguarded=$(python3 - <<'PY'

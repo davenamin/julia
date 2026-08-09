@@ -457,37 +457,33 @@ JL_DLLEXPORT void *jl_load_dynamic_library(const char *modname, unsigned flags, 
     if (!abspath) {
         const char *leaf = strrchr(modname, '/');
         leaf = (leaf == NULL) ? modname : leaf + 1;
-        ios_t base;
-        ios_mem(&base, IOS_INLSIZE);
-        ios_puts(leaf, &base);
-        ios_putc(0, &base);
-        char *b = base.buf;
-        size_t blen = strlen(b);
-        if (blen > 6 && strcmp(b + blen - 6, ".dylib") == 0)
-            b[blen - 6] = '\0';
-        // strip trailing numeric version components: "libgit2.1.6" -> "libgit2"
-        while (1) {
-            char *dot = strrchr(b, '.');
-            if (dot == NULL || dot == b || dot[1] == '\0')
-                break;
-            const char *p = dot + 1;
-            while (*p >= '0' && *p <= '9')
-                p++;
-            if (*p != '\0')
-                break;
-            *dot = '\0';
-        }
-        if (b[0] != '\0') {
-            ios_trunc(&path, 0);
-            ios_printf(&path, "@loader_path/../%s.framework/%s", b, b);
-            ios_putc(0, &path);
-            handle = jl_dlopen(path.buf, flags);
-        }
-        ios_close(&base);
-        if (handle) {
-            if (!(flags & JL_RTLD_NOLOAD))
-                jl_timing_puts(JL_TIMING_DEFAULT_BLOCK, jl_pathname_for_handle(handle));
-            goto success;
+        char base[PATHBUF];
+        size_t blen = strlen(leaf);
+        if (blen < sizeof(base)) {
+            memcpy(base, leaf, blen + 1);
+            if (blen > 6 && strcmp(base + blen - 6, ".dylib") == 0)
+                base[blen - 6] = '\0';
+            // strip trailing numeric version components: "libgit2.1.6" -> "libgit2"
+            while (1) {
+                char *dot = strrchr(base, '.');
+                if (dot == NULL || dot == base || dot[1] == '\0')
+                    break;
+                const char *p = dot + 1;
+                while (*p >= '0' && *p <= '9')
+                    p++;
+                if (*p != '\0')
+                    break;
+                *dot = '\0';
+            }
+            if (base[0] != '\0') {
+                snprintf(path, PATHBUF, "@loader_path/../%s.framework/%s", base, base);
+                handle = jl_dlopen(path, flags);
+                if (handle) {
+                    if (!(flags & JL_RTLD_NOLOAD))
+                        jl_timing_puts(JL_TIMING_DEFAULT_BLOCK, jl_pathname_for_handle(handle));
+                    return handle;
+                }
+            }
         }
     }
 #endif
