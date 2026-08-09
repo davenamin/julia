@@ -128,34 +128,119 @@ if [[ ! -s "$RAW" ]]; then
     exit 0
 fi
 
-# Split hits into the inherent stdlib-source-path category and everything else.
-# A stdlib source path looks like <build-prefix>/.../share/julia/stdlib/vX.Y/...
-# or <build-prefix>/.../stdlib/<Name>-<sha>/... (the vendored external stdlib
-# checkouts the sysimage bakes from).
 # Classify on the leaked path (field 2), never on the file it was found in —
 # every hit in the resources tree lives under .../share/julia/stdlib/vX.Y/.
-INHERENT_RE='(share/julia/stdlib/v[0-9]+\.[0-9]+|/stdlib/[A-Za-z0-9_]+-[0-9a-f]{40})'
-INHERENT="$(awk -F'\t' -v re="$INHERENT_RE" '$2 ~ re' "$RAW" | sort -u)" || true
-OTHER="$(awk -F'\t' -v re="$INHERENT_RE" '$2 !~ re' "$RAW" | sort -u)" || true
+#
+# Three kinds, only one of which is a defect:
+#
+#  * Not this machine's at all.  The generic "/Users/" net also catches string
+#    literals shaped like paths -- a Pkg test fixture naming /Users/test, a
+#    docstring quoting file:///C:/Users/user/... -- which are content, not
+#    leakage.  Anything not under a prefix that names *this* build tree is
+#    reported and otherwise ignored.
+#  * Inherent.  Julia records the absolute path of every source file it bakes,
+#    so each one shows up as a string: stdlib sources, the top-level Compiler
+#    that 1.12 moved to share/julia/Compiler, and the base files generated into
+#    the build directory (build_h.jl and friends).  Any `.jl` under the build
+#    tree is one of these.  The build root on its own is the same thing with
+#    nothing appended.
+#  * Everything else, which is the interesting case: a path with a component
+#    after it that is not a source file is something the runtime would try to
+#    *open* -- a JLL LIBPATH, an artifact or depot directory, a dylib.
+specific_re=""
+for pref in "${prefixes[@]}"; do
+    [[ "$pref" == "/Users/" ]] && continue
+    # Unanchored: a binary's hit is the whole `strings` line, so the path can
+    # sit behind a label -- OpenSSL emits `OPENSSLDIR: "/…"`.
+    specific_re="${specific_re:+$specific_re|}$(esc_re "$pref")"
+done
+roots_re=""
+for pref in "${prefixes[@]}"; do
+    [[ "$pref" == "/Users/" ]] && continue
+    roots_re="${roots_re:+$roots_re|}^$(esc_re "${pref%/}")/?$"
+done
+# Source files in any language: a compiler records __FILE__ the way Julia
+# records Method.file, so SuiteSparse's assertions carry .c paths for the same
+# reason the sysimage carries .jl ones.  Allow trailing punctuation, because a
+# binary's strings line is matched whole and often quotes the path.
+SRC_EXT='\.(jl|c|h|cc|cpp|cxx|hpp|inc|S|f|f90)([":,)[:space:]]|$)'
+INHERENT_RE="(share/julia/stdlib/v[0-9]+\.[0-9]+|/stdlib/[A-Za-z0-9_]+-[0-9a-f]{40}|share/julia/Compiler/|$SRC_EXT)"
+# A vendored dependency compiled with --prefix=<build>/usr keeps that prefix in
+# its own binary -- OpenSSL's OPENSSLDIR and ENGINESDIR are the usual ones.
+# Those directories cannot exist on a device and are never consulted there, and
+# the value is chosen by the dependency's build rather than by this port, so
+# they are reported apart from the rest.  The distinction that matters is which
+# binary holds the path: anything Julia's own images name is still a failure,
+# which is where a JLL LIBPATH leak would land.
+is_dep_binary() { # $1 = path of the file the hit came from
+    case "${1##*/}" in
+        JuliaSysimage|libjulia*) return 1 ;;
+    esac
+    [[ "$1" == *"/xcframeworks/"* ]]
+}
+
+FOREIGN="$(awk -F'\t' -v re="$specific_re" 're == "" || $2 !~ re' "$RAW" | sort -u)" || true
+MINE="$(awk -F'\t' -v re="$specific_re" 're != "" && $2 ~ re' "$RAW")" || true
+INHERENT="$(printf '%s\n' "$MINE" | awk -F'\t' -v re="$INHERENT_RE" -v roots="$roots_re" \
+            'NF && ($2 ~ re || (roots != "" && $2 ~ roots))' | sort -u)" || true
+REST="$(printf '%s\n' "$MINE" | awk -F'\t' -v re="$INHERENT_RE" -v roots="$roots_re" \
+        'NF && $2 !~ re && (roots == "" || $2 !~ roots)' | sort -u)" || true
+
+DEPPREFIX=""
+OTHER=""
+while IFS= read -r hit; do
+    [[ -n "$hit" ]] || continue
+    if is_dep_binary "${hit%%$'\t'*}"; then
+        DEPPREFIX="${DEPPREFIX:+$DEPPREFIX$'\n'}$hit"
+    else
+        OTHER="${OTHER:+$OTHER$'\n'}$hit"
+    fi
+done <<< "$REST"
 
 status=0
+
+# Everything below writes through `head`: the full list runs to hundreds of
+# lines, and a burst that size onto a non-blocking stdout -- which is what CI
+# hands the script -- fails the write with EAGAIN partway through.
+report() { # $1 = list, $2 = how many to show
+    local n; n=$(printf '%s\n' "$1" | wc -l | tr -d ' ')
+    printf '%s\n' "$1" | head -"$2" | sed 's/^/    /'
+    [[ "$n" -gt "$2" ]] && echo "    ... and $((n - $2)) more"
+    echo
+}
 
 if [[ -n "$OTHER" ]]; then
     echo "FAIL: build-host paths that should not be here:"
     echo
-    printf '%s\n' "$OTHER" | sed 's/^/    /'
-    echo
+    report "$OTHER" 20
     status=1
+fi
+
+if [[ -n "$DEPPREFIX" ]]; then
+    n=$(printf '%s\n' "$DEPPREFIX" | wc -l | tr -d ' ')
+    echo "NOTE: $n build-prefix strings inside vendored dependency binaries"
+    echo "      (their own --prefix, unreachable and unused on a device):"
+    echo
+    report "$DEPPREFIX" 10
+    if [[ -n "${IOS_STRICT_PATH_AUDIT:-}" ]]; then
+        echo "      IOS_STRICT_PATH_AUDIT is set — treating these as failures."
+        status=1
+    fi
+fi
+
+if [[ -n "$FOREIGN" ]]; then
+    echo "NOTE: path-shaped strings from no build tree of this machine"
+    echo "      (test fixtures and docstrings, not leakage):"
+    echo
+    report "$FOREIGN" 5
 fi
 
 if [[ -n "$INHERENT" ]]; then
     n=$(printf '%s\n' "$INHERENT" | wc -l | tr -d ' ')
-    echo "NOTE: $n baked stdlib source paths (inherent — see the header of this"
+    echo "NOTE: $n baked source paths (inherent — see the header of this"
     echo "      script; fix by building from a username-free directory):"
     echo
-    printf '%s\n' "$INHERENT" | head -10 | sed 's/^/    /'
-    [[ "$n" -gt 10 ]] && echo "    ... and $((n - 10)) more"
-    echo
+    report "$INHERENT" 10
     if [[ -n "${IOS_STRICT_PATH_AUDIT:-}" ]]; then
         echo "      IOS_STRICT_PATH_AUDIT is set — treating these as failures."
         status=1
