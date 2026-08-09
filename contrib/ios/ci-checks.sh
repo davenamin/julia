@@ -72,6 +72,31 @@ grep -q 'interpreter-ccall' src/Makefile \
     && pass "interpreter-ccall is in src/Makefile SRCS" \
     || fail "interpreter-ccall missing from src/Makefile SRCS"
 
+# julia-sysimg-ios-% is a fork-local copy of upstream's julia-sysimg-%, and a
+# prerequisite the release adds to the original does not appear in the copy.
+# 1.12 moved the compiler to a top-level Compiler/ that Base_compiler.jl
+# includes by path out of DATAROOT, reached through the symlink
+# TOP_LEVEL_PKG_LINK_TARGETS makes; without it the bake failed on a missing
+# Compiler.jl.  julia-cli-% is deliberately absent: julia-src-% requires it.
+sysimg_prereqs() {
+    sed -nE "s/^julia-sysimg-$1(release|-release) .*: julia-sysimg-$1% : (.*)/\2/p" Makefile \
+        | head -1 | sed 's/|.*//'
+}
+generic=$(sysimg_prereqs "")
+iosreq=$(sysimg_prereqs "ios-")
+drift=""
+for p in $generic; do
+    [[ "$p" == "julia-cli-%" ]] && continue
+    grep -qF -- "$p" <<<"$iosreq" || drift="$drift $p"
+done
+if [[ -z "$generic" || -z "$iosreq" ]]; then
+    fail "could not read the julia-sysimg prerequisites from Makefile"
+elif [[ -z "$drift" ]]; then
+    pass "julia-sysimg-ios-% carries every prerequisite julia-sysimg-% has"
+else
+    fail "julia-sysimg-ios-% is missing prerequisites:$drift"
+fi
+
 # The iOS branch of src/Makefile spells RT_LLVMLINK out by hand, because
 # llvm-config is built for iOS and cannot run on the host to be asked.  That
 # hand-written list has to cover the same archives as RT_LLVM_LIBS, which the
