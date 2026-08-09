@@ -202,10 +202,12 @@ status=0
 # Everything below writes through `head`: the full list runs to hundreds of
 # lines, and a burst that size onto a non-blocking stdout -- which is what CI
 # hands the script -- fails the write with EAGAIN partway through.
+# awk rather than `head`, which closes the pipe on the builtin printf feeding
+# it and turns the report itself into `printf: write error: Broken pipe`.
 report() { # $1 = list, $2 = how many to show
-    local n; n=$(printf '%s\n' "$1" | wc -l | tr -d ' ')
-    printf '%s\n' "$1" | head -"$2" | sed 's/^/    /'
-    [[ "$n" -gt "$2" ]] && echo "    ... and $((n - $2)) more"
+    printf '%s\n' "$1" | awk -v n="$2" '
+        NR <= n { print "    " $0 }
+        END     { if (NR > n) printf "    ... and %d more\n", NR - n }'
     echo
 }
 
