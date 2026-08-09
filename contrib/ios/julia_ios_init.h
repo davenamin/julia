@@ -11,7 +11,7 @@
 // contrib/ios/build-xcframework.sh (julia-runtime-resources/) so Julia can
 // locate its stdlib + any packages baked into the sysimage.
 //
-// The functions below wire up the paths and call jl_init_with_image with
+// The functions below wire up the paths and call jl_init_with_image_file with
 // the sibling JuliaSysimage.framework's binary as the image, before Julia
 // is asked to do anything else.
 //
@@ -81,11 +81,11 @@ void julia_ios_set_paths(const char *resources_path,
 // Build/Products).  Mixing the two loads a second set of Julia dylibs and
 // fails jl_init's sysimage consistency check.
 //
-// Combines julia_ios_set_paths + jl_init_with_image into one call: it
+// Combines julia_ios_set_paths + jl_init_with_image_file into one call: it
 // points JULIA_BINDIR at <resources>/bin, layers the writable depot in
 // front of the bundled one (see julia_ios_set_paths — pass NULL to skip),
 // opens the sibling JuliaSysimage.framework's binary as the system image,
-// and calls jl_init_with_image.  No post-init patching is needed — Base
+// and calls jl_init_with_image_file.  No post-init patching is needed — Base
 // computes Sys.STDLIB (and Pkg its stdlib dir) from BINDIR, which now
 // resolves into the resources tree.  Returns 0 on success, -1 on failure
 // (framework_path or resources_path missing/not a directory,

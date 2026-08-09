@@ -43,7 +43,7 @@ Conventions for work on this branch:
 |---|---|
 | `contrib/ios/Makefile` | Bundles each built dylib as its own single-binary framework, signs them, generates dSYMs. |
 | `contrib/ios/build-xcframework.sh` | Drives both slices (device + simulator), combines them into xcframeworks, stages `julia-runtime-resources/`. |
-| `contrib/ios/julia_ios_init.{c,h}` | Embedding helper for the app target: sets `JULIA_BINDIR`/depot/load-path, locates the sysimage, calls `jl_init_with_image`. |
+| `contrib/ios/julia_ios_init.{c,h}` | Embedding helper for the app target: sets `JULIA_BINDIR`/depot/load-path, locates the sysimage, calls `jl_init_with_image_file`. |
 | `contrib/ios/sysimage_env_init.jl` | Preamble for the sysimage bake — re-runs the loading init and module `__init__`s that `--output-o` mode skips. |
 | `contrib/ios/check-host-paths.sh` | Audits shipped artifacts for build-machine absolute paths. |
 | `contrib/ios/test-gzip-inflate.jl` | Compares Pkg's in-process gzip path against the `7z` path. |
@@ -101,7 +101,7 @@ Conventions for work on this branch:
   including raising before any argument is evaluated.
 
 - `src/jlapi.c`, `src/julia.h`, `src/julia_internal.h` — embedding surface for
-  `jl_init_with_image`.
+  `jl_init_with_image_file`.
 - `src/signals-mach.c` — drop references to private dyld API, which App Store
   validation rejects (ITMS-90338).
 

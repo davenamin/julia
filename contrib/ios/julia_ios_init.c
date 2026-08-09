@@ -57,7 +57,7 @@ static int jit_requested = 0;
 static int loaded_framework_dir(char *out, size_t outsize)
 {
     Dl_info info;
-    if (!dladdr((void *)&jl_init_with_image, &info) || !info.dli_fname)
+    if (!dladdr((void *)&jl_init_with_image_file, &info) || !info.dli_fname)
         return -1;
     const char *slash = strrchr(info.dli_fname, '/');
     if (!slash)
@@ -194,7 +194,7 @@ int julia_ios_init_with_paths(const char *framework_path,
     // Base reads these env vars and computes Sys.STDLIB during sysimage load.
     julia_ios_set_paths(resources_path, writable_depot_path);
 
-    // Point the bindir argument at the same <resources>/bin.  jl_init_with_image
+    // Point the bindir argument at the same <resources>/bin.  jl_init_with_image_file
     // assigns it straight into jl_options.julia_bindir (src/jlapi.c), and it
     // takes precedence over the JULIA_BINDIR env var, so pass it explicitly
     // to be unambiguous.
@@ -209,7 +209,7 @@ int julia_ios_init_with_paths(const char *framework_path,
     // no loose dylibs) named JuliaSysimage.framework, a SIBLING of
     // Julia.framework in the app's Frameworks/ directory.  fw_dir is the
     // Julia.framework directory, so hop up one level and into the sysimage
-    // framework.  Pass the absolute path so jl_init_with_image doesn't
+    // framework.  Pass the absolute path so jl_init_with_image_file doesn't
     // derive it from bindir.
     char image[2048];
     int n = snprintf(image, sizeof(image),
@@ -233,7 +233,7 @@ int julia_ios_init_with_paths(const char *framework_path,
         jl_options.compile_enabled = JL_OPTIONS_COMPILE_MIN;
 #endif
 
-    jl_init_with_image(bindir, image);
+    jl_init_with_image_file(bindir, image);
     return jl_exception_occurred() ? -1 : 0;
 }
 
