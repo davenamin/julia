@@ -204,6 +204,77 @@ else
     printf '%s\n' "$api_bad"
 fi
 
+# Type-check the same regions for real.  `_OS_IOS_` is normally reachable only
+# on Apple platforms (support/platform.h defines it inside the Darwin branch),
+# but defining it directly compiles the iOS regions anywhere: the three headers
+# a build would generate are stubbed, and nothing here needs the iOS SDK.  That
+# turns an hour-long cross-build into a second, and unlike the name check above
+# it catches wrong argument counts and wrong types too.
+#
+# Each file is compiled twice.  Only a file that compiles *without* `_OS_IOS_`
+# can say anything: if the baseline already fails, this environment is missing
+# something the file needs -- an ARM host for processor_arm.cpp, a matching
+# LLVM for jitlayers.cpp -- and the file is skipped rather than blamed.
+FFI_INC=""
+if [[ -f /usr/include/ffi.h ]]; then
+    FFI_INC="/usr/include"
+elif ffi_dir=$(pkg-config --variable=includedir libffi 2>/dev/null) && [[ -f "$ffi_dir/ffi.h" ]]; then
+    FFI_INC="$ffi_dir"
+elif sdk=$(xcrun --show-sdk-path 2>/dev/null) && [[ -f "$sdk/usr/include/ffi/ffi.h" ]]; then
+    FFI_INC="$sdk/usr/include/ffi"
+else
+    for d in /usr/include/*-linux-gnu; do
+        [[ -f "$d/ffi.h" ]] && FFI_INC="$d" && break
+    done
+fi
+
+if ! command -v cc >/dev/null 2>&1 || ! command -v llvm-config >/dev/null 2>&1; then
+    skip "iOS-only code compile check (needs cc and llvm-config)"
+elif [[ -z "$FFI_INC" ]]; then
+    skip "iOS-only code compile check (no ffi.h; install libffi-dev)"
+else
+    gendir=$(mktemp -d)
+    trap 'rm -rf "$gendir"' EXIT
+    # The three headers the build generates.  Only julia_version.h has content
+    # anything here reads; the other two are lists the compile does not need.
+    v=$(cat VERSION)
+    { echo "#ifndef JL_VERSION_H"; echo "#define JL_VERSION_H"
+      echo "#define JULIA_VERSION_STRING \"$v\""
+      echo "$v" | awk 'BEGIN{FS="[.,+-]"}{print "#define JULIA_VERSION_MAJOR "$1"\n#define JULIA_VERSION_MINOR "$2"\n#define JULIA_VERSION_PATCH "$3;
+                       print (NF<4) ? "#define JULIA_VERSION_IS_RELEASE 1" : "#define JULIA_VERSION_IS_RELEASE 0"}'
+      echo "#endif"; } > "$gendir/julia_version.h"
+    : > "$gendir/jl_internal_funcs.inc"
+    : > "$gendir/uprobes.h.gen"
+
+    # clang makes an implicit declaration an error; gcc only warns, which would
+    # let exactly the rename this check exists for through.
+    cc_werror="-Werror=implicit-function-declaration -Werror=implicit-int"
+    cc_werror="$cc_werror -Werror=incompatible-pointer-types -Werror=int-conversion"
+    cc_inc="-D_GNU_SOURCE -I src -I src/support -I src/flisp -I $gendir"
+    cc_inc="$cc_inc -I $(llvm-config --includedir) -I $FFI_INC"
+
+    for f in $(grep -lE '_OS_IOS_|JL_CCALL_FFI' src/*.c src/*.cpp 2>/dev/null); do
+        case "$f" in
+            *.cpp) comp="${CXX:-c++} -std=c++17" ;;
+            *)     comp="${CC:-cc}" ;;
+        esac
+        # shellcheck disable=SC2086
+        if ! $comp -fsyntax-only $cc_werror $cc_inc "$f" >/dev/null 2>&1; then
+            skip "$f (does not compile here without _OS_IOS_ either)"
+            continue
+        fi
+        # shellcheck disable=SC2086
+        if out=$($comp -fsyntax-only -D_OS_IOS_ $cc_werror $cc_inc "$f" 2>&1); then
+            pass "$f compiles with _OS_IOS_"
+        else
+            fail "$f does not compile with _OS_IOS_"
+            echo "$out" | grep -E "error:" | head -10 | sed 's/^/      /'
+        fi
+    done
+    rm -rf "$gendir"
+    trap - EXIT
+fi
+
 # App Store validation rejects a binary that references private symbols, so
 # every keymgr/dyld-atfork call has to sit inside a !TARGET_OS_IPHONE guard.
 unguarded=$(python3 - <<'PY'

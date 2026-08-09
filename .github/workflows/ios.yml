@@ -91,6 +91,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      # Lets ci-checks.sh compile the iOS-only regions of src/ here rather than
+      # leaving them to the cross-build; it skips that check without these.
+      - name: Install the headers the iOS-only compile check needs
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq llvm-dev libffi-dev
       - run: contrib/ios/ci-checks.sh
 
   # Everything in ci-checks.sh that needs macOS and the iOS SDK -- chiefly
