@@ -33,6 +33,17 @@ Base.init_depot_path()       # DEPOT_PATH (JULIA_DEPOT_PATH or default depot)
 Base.init_load_path()        # LOAD_PATH (JULIA_LOAD_PATH, e.g. @:@stdlib)
 Base.init_active_project()   # active project (JULIA_PROJECT)
 
+# 3. `Base._atexit_hooks_finished` is serialized with the image, and
+#    `Base.__init__` is what normally clears it (base/Base.jl).  Left set, the
+#    first package whose load registers an exit hook -- Downloads does, so
+#    anything reaching it through Pkg does too -- dies on `cannot register new
+#    atexit hook; already exiting.` and the bake silently drops that package.
+#    Hooks registered here run when the *baked image* exits, which is what a
+#    package expects.  `setglobal!` because a plain `Base.x = ...` from this
+#    file, which is evaluated in Main, is "cannot assign variables in other
+#    modules".
+setglobal!(Base, :_atexit_hooks_finished, false)
+
 # `--output-o` also *defers* each restored module's `__init__`:
 # `jl_init_restored_module` only queues the module into `jl_module_init_order`
 # for the output image to run at its own startup (src/module.c), so baked
