@@ -62,6 +62,16 @@ CURL_TLS_CONFIGURE_FLAGS := --with-openssl
 endif
 CURL_CONFIGURE_FLAGS += $(CURL_TLS_CONFIGURE_FLAGS)
 
+ifeq ($(IOS), 1)
+# AC_CHECK_FUNCS links against a prototype it declares itself, so it finds
+# pipe2 in the SDK's libSystem stub.  <unistd.h> only declares it above a
+# deployment target newer than IOS_VERSION_MIN, so lib/socketpair.c then calls
+# an undeclared function and clang rejects it.  The symbol is genuinely
+# unusable at our target, so answer the check directly; curl falls back to
+# pipe() plus fcntl().
+CURL_CONFIGURE_FLAGS += ac_cv_func_pipe2=no
+endif
+
 $(BUILDDIR)/curl-$(CURL_VER)/build-configured: $(SRCCACHE)/curl-$(CURL_VER)/source-extracted
 	mkdir -p $(dir $@)
 	cd $(dir $@) && \
