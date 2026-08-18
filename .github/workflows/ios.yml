@@ -204,6 +204,23 @@ jobs:
       - name: Accelerate forwarding
         run: ./usr/bin/julia --startup-file=no contrib/ios/test-accelerate.jl
 
+      # Smoke-test the single-process test driver on the host, where a bug in
+      # it is a two-minute failure rather than one that surfaces after a
+      # dependency build, a sysimage bake and a simulator boot.  It is copied
+      # into test/ because that is where build-xcframework.sh stages it and
+      # where its relative `include("choosetests.jl")` resolves.
+      #
+      # This checks the driver, not the port: the host julia has a JIT and a
+      # julia executable.  contrib/ios/simulator-runtests.c is what runs it
+      # under the constraints that matter.
+      - name: iOS test driver runs
+        run: |
+          cp contrib/ios/ios_runtests.jl test/ios_runtests.jl
+          ./usr/bin/julia --startup-file=no --check-bounds=yes --depwarn=error \
+              -e 'include("test/ios_runtests.jl"); exit(Main.IOS_TEST_FAILURES)' \
+              goto some ordering osutils version meta
+          rm -f test/ios_runtests.jl
+
       # usr/share/julia/stdlib/vX.Y is a directory of symlinks into
       # stdlib/<Name>-<sha>, so usr/ alone is not a working prefix anywhere
       # else: the iOS jobs build out of tree and extract their own copies
@@ -296,6 +313,10 @@ jobs:
       - name: Build the simulator slice
         env:
           SLICES: iphonesimulator
+          # Stage test/ into the resources tree so the two test-suite steps
+          # below have something to run.  Off by default: a shipping app has
+          # no reason to carry the suite.
+          IOS_STAGE_TESTS: 1
         run: contrib/ios/build-xcframework.sh "$PWD/ios-out"
 
       - name: Sysimage is an iOS-simulator arm64 Mach-O
@@ -322,6 +343,19 @@ jobs:
                 contrib/ios/simulator-selftest.c -o "$PWD/selftest"
           file "$PWD/selftest"
 
+      # Same embedding API, but its job is to run Julia's own test suite
+      # rather than a fixed set of assertions.  See contrib/ios/simulator-runtests.c.
+      - name: Build the test-suite harness
+        run: |
+          fw="$PWD/build-ios-sim/install/Frameworks"
+          xcrun --sdk iphonesimulator clang -arch arm64 -Wall \
+                -mios-simulator-version-min=16.4 \
+                -I contrib/ios -F "$fw" -framework Julia \
+                -Wl,-rpath,"$fw" \
+                contrib/ios/julia_ios_init.c \
+                contrib/ios/simulator-runtests.c -o "$PWD/iostests"
+          file "$PWD/iostests"
+
       - name: Boot a simulator
         run: |
           udid=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['udid'] for r,v in d.items() if 'iOS' in r for x in v if x.get('isAvailable')))")
@@ -338,6 +372,57 @@ jobs:
                 "$PWD/build-ios-sim/install/Frameworks" \
                 "$PWD/ios-out/julia-runtime-resources" \
                 "$RUNNER_TEMP/depot"
+
+      # Tier 1: upstream's own runner, against the staged tree, with the JIT
+      # on.  One invocation per test name, because test/runtests.jl only
+      # avoids `addprocs` — which would spawn a julia executable that does not
+      # exist here — when the selection expands to exactly one test set.
+      #
+      # `env -u CI`: with CI set, runtests.jl writes Buildkite result JSON
+      # next to the test tree, which is not what this step is measuring.
+      #
+      # The JIT is a simulator-only luxury (it runs under macOS rules), so a
+      # pass here says the runtime, sysimage and staged stdlib tree are sound
+      # — not that a device would get this far.  Tier 2 below is the
+      # device-representative half.
+      - name: "Tier 1: Julia's test suite under the JIT"
+        env:
+          TIER1_TESTS: >-
+            goto some meta ordering osutils version int checked bitset
+            operators intfuncs char copy functional namedtuple tuple sets
+            dict hashing sorting cartesian specificity
+        run: |
+          failed=""
+          for t in $TIER1_TESTS; do
+            echo "::group::$t"
+            if env -u CI xcrun simctl spawn "$SIM_UDID" "$PWD/iostests" \
+                 "$PWD/build-ios-sim/install/Frameworks" \
+                 "$PWD/ios-out/julia-runtime-resources" \
+                 "$RUNNER_TEMP/depot-tests" runtests jit "$t"
+            then echo "PASS $t"
+            else echo "FAIL $t"; failed="$failed $t"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "tier 1 failures:$failed"
+            exit 1
+          fi
+
+      # Tier 2: the same test files, run the way a device has to run them —
+      # one process, no Distributed, no subprocesses, and --compile=min so
+      # everything outside the sysimage goes through the interpreter (every
+      # `ccall` included; see src/interpreter-ccall.c).  This is the shape
+      # that matters for the port, and it is why the selection is small:
+      # interpreted test sets cost orders of magnitude more than compiled ones.
+      - name: "Tier 2: Julia's test suite under the interpreter"
+        env:
+          TIER2_TESTS: "goto some ordering osutils version meta"
+        run: |
+          env -u CI xcrun simctl spawn "$SIM_UDID" "$PWD/iostests" \
+              "$PWD/build-ios-sim/install/Frameworks" \
+              "$PWD/ios-out/julia-runtime-resources" \
+              "$RUNNER_TEMP/depot-tests-interp" ios interp $TIER2_TESTS
 
       # Leave the runner's simulator as we found it; `delete` would remove a
       # device from the image, so only shut down.

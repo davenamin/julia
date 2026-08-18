@@ -100,6 +100,14 @@ void julia_ios_set_paths(const char *resources_path,
 // Call julia_ios_enable_jit() beforehand to opt out (development only).
 // The simulator keeps the JIT.
 //
+// On BOTH device and simulator it also lowers jl_options.use_compiled_modules
+// from YES to EXISTING, so `using` never invokes the precompiler: generating
+// a cache file spawns `Base.julia_cmd()`, and an app bundle has no julia
+// executable (nor, on device, permission to fork).  A cache file shipped in
+// the resources tree is still used; a package without one is loaded from
+// source.  Set jl_options.use_compiled_modules yourself before this call to
+// keep whatever value you chose.
+//
 // THREADING: the thread this runs on becomes Julia's main thread — all
 // later jl_eval_string / jl_call* invocations must happen on that same
 // thread (or via Julia-side threading primitives).  Initializing on a

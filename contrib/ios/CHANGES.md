@@ -53,6 +53,8 @@ Conventions for work on this branch:
 | `contrib/ios/check-host-paths.sh` | Audits shipped artifacts for build-machine absolute paths. |
 | `contrib/ios/ci-checks.sh` | Structural checks: patch application, iOS-only compiles, fork-vs-upstream drift. |
 | `contrib/ios/simulator-selftest.c` | Command-line embedder run under `simctl spawn`; drives the ccall interpreter and BLAS report. |
+| `contrib/ios/simulator-runtests.c` | Command-line embedder that runs Julia's own test suite under `simctl spawn`, in either driver and either execution mode. |
+| `contrib/ios/ios_runtests.jl` | Single-process, `Distributed`-free test driver — the only shape a device can run. Staged into the resources tree next to `test/runtests.jl`. |
 | `contrib/ios/test-gzip-inflate.jl` | Compares Pkg's in-process gzip path against the `7z` path. |
 | `contrib/ios/test-accelerate.jl` | Compares the Accelerate and OpenBLAS backends, and reports Accelerate's LAPACK coverage. |
 | `contrib/ios/APPSTORE.md` | Submission notes: frameworks layout, privacy manifests, export compliance, GPL, BLAS. |
@@ -196,6 +198,46 @@ Nothing outside the stdlib JLLs; see below.
   registries are themselves `.tar.gz`.  Delivered as a patch because
   `stdlib/Pkg.version` pins an upstream commit.
 
+## Running Julia's test suite
+
+The suite runs in the iOS simulator, under `simctl spawn`, through
+`contrib/ios/simulator-runtests.c` — the same embedding API an app uses.
+There is no `julia` executable to invoke, so the harness sets what
+`test/Makefile` would pass on the command line (`--check-bounds=yes`,
+`--depwarn=error`, `--startup-file=no`) directly in `jl_options` before
+`jl_init`, and hands the test selection to `test/choosetests.jl` through
+`Core.ARGS`.  The staged resources tree carries `test/` only when
+`build-xcframework.sh` runs with `IOS_STAGE_TESTS=1`; a shipping app has no
+reason to include it.
+
+Two drivers, run as two CI steps:
+
+- **`runtests`** — `test/runtests.jl`, upstream's own runner, unmodified,
+  with the JIT on.  It distributes work with `Distributed`, and any selection
+  expanding to more than one test set calls `addprocs_with_testenv`, which
+  spawns `Base.julia_cmd()`.  So it is invoked once per test name, and its
+  value is fidelity: the staged tree is exercised by the runner upstream
+  ships.  The JIT is a simulator-only luxury — the simulator runs under macOS
+  rules, where mapping executable memory is allowed.
+- **`ios`** — `contrib/ios/ios_runtests.jl`, one process, every test set in
+  sequence, no `Distributed` and no subprocesses, under `--compile=min`.
+  This is the only shape a device could run, and it puts every `ccall` in
+  the test files through the libffi interpreter path.  Interpreted test sets
+  cost orders of magnitude more than compiled ones, so the selection is
+  deliberately small.
+
+`ios_runtests.jl` reuses `choosetests.jl` verbatim for selection and mirrors
+`testdefs.jl`'s per-test isolation (a fresh module, a seeded RNG, cleared
+error hints).  Where `testdefs.jl` *checks* that a test restored `DEPOT_PATH`,
+`LOAD_PATH`, `ENV` and the active project, this driver restores them: upstream
+gives each test set a worker process that is discarded afterwards, whereas
+here a leak would corrupt the next test rather than only its own.
+
+What this does not cover: anything that needs a subprocess (`spawn`,
+`cmdlineargs`, `precompile`, `atexit`, most of `loading`) cannot run on iOS
+at all, and `Base.julia_cmd()` names an executable that is not in the bundle.
+Those test sets are excluded rather than expected to pass.
+
 ## Known limitations
 
 - Simulator slices are arm64 only (Apple-silicon hosts).
@@ -205,6 +247,12 @@ Nothing outside the stdlib JLLs; see below.
   C calls of essentially any shape through libffi, but `@cfunction` needs the
   compiler and always will, and `Int128`/`UInt128`, `Float16` and SIMD vectors
   have no libffi representation.
+- Packages outside the sysimage load from source.  Generating a precompile
+  cache runs `Base.julia_cmd()` in a subprocess, so
+  `julia_ios_init_with_paths` lowers `use_compiled_modules` to `EXISTING`: a
+  cache file shipped in the resources tree is still used, anything else is
+  included from source.  `base/sysimg.jl` bakes seven stdlibs, so Test,
+  Printf and Dates all take the source path.
 - Sparse factorizations are absent, following `USE_GPL_LIBS = 0`.
 - The sysimage still contains the build tree's absolute paths for stdlib
   sources — Julia records those by design (`Sys.BUILD_STDLIB_PATH`) and

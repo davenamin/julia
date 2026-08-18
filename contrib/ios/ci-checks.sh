@@ -407,6 +407,31 @@ for name, job in jobs.items():
             a = s.get("with", {}).get("name")
             if a not in produced:
                 bad.append("%s downloads artifact %r that nothing uploads" % (name, a))
+
+# The tier steps name test sets for test/choosetests.jl, which errors on a
+# name it cannot resolve.  A typo there costs a full dependency build, a
+# sysimage bake and a simulator boot before it surfaces.
+import os
+def step_env(s):
+    return s.get("env") or {}
+for name, job in jobs.items():
+    for s in job["steps"]:
+        for key in ("TIER1_TESTS", "TIER2_TESTS"):
+            for t in str(step_env(s).get(key, "")).split():
+                if not os.path.isfile(os.path.join("test", t + ".jl")):
+                    bad.append("%s: %s names %r but test/%s.jl does not exist"
+                               % (name, key, t, t))
+
+# Those steps read the test tree out of the staged resources, which
+# build-xcframework.sh only produces under IOS_STAGE_TESTS=1.
+runs_tiers = any(k in step_env(s)
+                 for job in jobs.values() for s in job["steps"]
+                 for k in ("TIER1_TESTS", "TIER2_TESTS"))
+stages = any(str(step_env(s).get("IOS_STAGE_TESTS", "")) == "1"
+             for job in jobs.values() for s in job["steps"])
+if runs_tiers and not stages:
+    bad.append("a tier step runs the test suite but no step sets IOS_STAGE_TESTS=1")
+
 print("\n".join(bad))
 WFPY
 )
@@ -421,6 +446,21 @@ WFPY
 else
     skip "workflow checks"
 fi
+
+# The test-suite harness resolves its driver by filename inside the staged
+# resources tree.  Nothing links the two, so check the names agree: a driver
+# the stager never copies fails only at the point of running it.
+for drv in $(sed -n 's/.*driver_file = "\([A-Za-z0-9_.-]*\)".*/\1/p' \
+                 contrib/ios/simulator-runtests.c 2>/dev/null); do
+    if [[ -f "test/$drv" ]]; then
+        pass "simulator-runtests.c driver test/$drv exists in the source tree"
+    elif [[ -f "contrib/ios/$drv" ]] &&
+         grep -q "ios_runtests.jl" contrib/ios/build-xcframework.sh; then
+        pass "simulator-runtests.c driver $drv is staged from contrib/ios/"
+    else
+        fail "simulator-runtests.c names driver '$drv' that nothing provides at <resources>/test/$drv"
+    fi
+done
 
 # ---------------------------------------------------------------------------
 section "fork-local patches apply to their pinned sources"

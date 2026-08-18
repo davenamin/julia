@@ -302,6 +302,23 @@ package_runtime_resources() {
         exit 1
     fi
 
+    # Julia's own test suite, for contrib/ios/simulator-runtests.c.  Off by
+    # default: a shipping app has no reason to carry it, and it is several
+    # megabytes of .jl the App Store bundle would pay for.
+    #
+    # Both drivers resolve their inputs relative to this directory —
+    # `test_path` in test/choosetests.jl returns <test>/<name>.jl for a base
+    # test, <resources>/Compiler/test/... for a Compiler test, and
+    # <stdlib>/<Pkg>/test/... for a stdlib one (that last is already here,
+    # since the stdlib copy above brings each stdlib's test/ with it).
+    if [[ "${IOS_STAGE_TESTS:-0}" == "1" ]]; then
+        cp -RL "$JULIA_SRC/test" "$out/test"
+        cp "$SCRIPT_DIR/ios_runtests.jl" "$out/test/ios_runtests.jl"
+        mkdir -p "$out/Compiler"
+        cp -RL "$JULIA_SRC/Compiler/test" "$out/Compiler/test"
+        echo "    staged the test suite (IOS_STAGE_TESTS=1)"
+    fi
+
     # CA root certificates.  MozillaCACerts_jll computes the cert path as
     # JULIA_BINDIR/../share/julia/cert.pem; with JULIA_BINDIR=<resources>/bin
     # that resolves to this copy, so NetworkOptions / Downloads / LibGit2

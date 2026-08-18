@@ -233,6 +233,25 @@ int julia_ios_init_with_paths(const char *framework_path,
         jl_options.compile_enabled = JL_OPTIONS_COMPILE_MIN;
 #endif
 
+    // Never let `using` reach the precompiler.  The default
+    // (USE_COMPILED_MODULES_YES) makes `Base.require` compile a missing cache
+    // file, and that runs `Base.julia_cmd()` in a subprocess — there is no
+    // julia executable in an app bundle, and a device forbids fork/exec
+    // outright, so the failure is a confusing `IOError` deep inside loading.jl
+    // rather than anything an app author can act on.
+    //
+    // EXISTING keeps the useful half: a cache file shipped in the resources
+    // tree is still loaded, and a package with no cache is included from
+    // source instead of triggering a compile.  Only the sysimage's own
+    // stdlibs are baked (base/sysimg.jl bakes seven of them), so every other
+    // stdlib — Test, Dates, Printf — takes the source path.
+    //
+    // An app that has arranged for a working precompiler can opt back in by
+    // setting jl_options.use_compiled_modules itself before this call; only
+    // the untouched default is lowered.
+    if (jl_options.use_compiled_modules == JL_OPTIONS_USE_COMPILED_MODULES_YES)
+        jl_options.use_compiled_modules = JL_OPTIONS_USE_COMPILED_MODULES_EXISTING;
+
     jl_init_with_image_file(bindir, image);
     return jl_exception_occurred() ? -1 : 0;
 }
