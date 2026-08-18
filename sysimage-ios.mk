@@ -80,10 +80,11 @@ IOS_SYSIMAGE_EXTRA_JL ?=
 # Optional: extra Julia project whose packages should be baked into the iOS
 # sysimage.  Set IOS_SYSIMAGE_EXTRA_PROJECT=/abs/path/to/project-dir, where
 # the directory contains Project.toml + Manifest.toml.  Run
-# `julia --pkgimages=no --project=<dir> -e 'using Pkg; Pkg.instantiate()'`
-# first so the host's depot has the package sources downloaded.  Combined
-# with IOS_SYSIMAGE_EXTRA_JL containing `using SomePackage` lines, the listed
-# packages get baked into sys.dylib.
+# `julia --project=<dir> -e 'using Pkg; Pkg.instantiate()'` first so the
+# package *sources* are in the host depot; the bake precompiles them itself,
+# against the sysimage it is about to extend and into a depot of its own (see
+# IOS_BAKE_DEPOT below).  Combined with IOS_SYSIMAGE_EXTRA_JL containing
+# `using SomePackage` lines, the listed packages get baked into sys.dylib.
 #
 # NOTE on --pkgimages=no: precompilation then emits only the .ji serialized
 # cache and no native .dylib, which is all the bake needs — stage 3 loads the
@@ -107,14 +108,30 @@ IOS_SYSIMAGE_EXTRA_PROJECT ?=
 # tree, including the sources its symlinks name.
 IOS_BAKE_STDLIB := $(JULIAHOME)/usr/share/julia/stdlib/$(VERSDIR)
 
+# A precompile cache is only valid against the sysimage it was built with, and
+# each slice bakes its own sysbase.ji.  Sharing one depot between slices means
+# the caches written for the device bake are wrong for the simulator bake and
+# the other way round; stage 3 runs in `--output-o` mode and cannot rebuild
+# them, so the stale ones surface as an unresolved import -- typically
+# `UndefVarError(:BlasFloat, ..., StaticArrays)` for a package importing a name
+# from a stdlib that came out of the sysimage.  Give each slice a depot of its
+# own, ahead of the one holding the package sources.  It sits outside usr/ so
+# it is neither installed nor packaged.
+IOS_BAKE_DEPOT := $(abspath $(BUILDROOT))/ios-bake-depot
+# Where the extras project's packages were instantiated.  An empty entry in
+# JULIA_DEPOT_PATH expands to the *bundled* depot rather than this one, and a
+# non-empty first entry suppresses the usual default, so name it.
+IOS_HOST_DEPOT := $(if $(JULIA_DEPOT_PATH),$(JULIA_DEPOT_PATH),$(HOME)/.julia)
+
 # Env vars pointing the host julia at its in-tree bindir / sysimage / depot.
 # When IOS_SYSIMAGE_EXTRA_PROJECT is set, activate that project and let the
-# host's default depot be visible (so installed packages resolve); otherwise
-# lock down to stdlib only, which is what the regular bake expects.
+# host's depot be visible (so installed packages resolve); otherwise lock down
+# to stdlib only, which is what the regular bake expects.
 ifneq ($(IOS_SYSIMAGE_EXTRA_PROJECT),)
 HOST_JULIA_ENV := JULIA_BINDIR=$(JULIAHOME)/usr/bin \
                  JULIA_LOAD_PATH=@:@stdlib \
                  JULIA_PROJECT=$(IOS_SYSIMAGE_EXTRA_PROJECT) \
+                 JULIA_DEPOT_PATH=$(IOS_BAKE_DEPOT):$(IOS_HOST_DEPOT): \
                  JULIA_NUM_THREADS=1
 else
 HOST_JULIA_ENV := JULIA_BINDIR=$(JULIAHOME)/usr/bin \
@@ -251,8 +268,26 @@ $(build_private_libdir)/sysbase.ji: $(build_private_libdir)/basecompiler.ji $(JU
 # loads that package without linking a native pkgimage .dylib for it.  Nothing
 # here consumes one — the package's methods are compiled into sys.dylib via
 # --compile=all — so the link is pure overhead.
+# Extras bakes precompile the project against this slice's sysbase.ji first,
+# into this slice's depot.  Stage 3 loads those packages in `--output-o` mode,
+# where a cache miss cannot be repaired -- Julia will not write one from an
+# output-mode process -- so the caches have to be correct before it starts.
+# Keyed on sysbase.ji: rebake the image and they are regenerated against it.
+ifneq ($(IOS_SYSIMAGE_EXTRA_PROJECT),)
+IOS_EXTRAS_STAMP := $(IOS_BAKE_DEPOT)/.precompiled
+$(IOS_EXTRAS_STAMP): $(build_private_libdir)/sysbase.ji
+	$(call check_host_julia)
+	@mkdir -p $(dir $@)
+	@$(call PRINT_JULIA, $(HOST_JULIA_ENV) $(HOST_JULIA) --sysimage $< \
+		--pkgimages=no --startup-file=no \
+		-e 'using Pkg; Pkg.precompile()')
+	@echo 1 > $@
+else
+IOS_EXTRAS_STAMP :=
+endif
+
 define sysimg_ios_builder
-$$(build_private_libdir)/sys$1-o.a : $$(build_private_libdir)/sysbase.ji $$(JULIAHOME)/contrib/generate_precompile.jl $$(JULIAHOME)/contrib/ios/sysimage_env_init.jl
+$$(build_private_libdir)/sys$1-o.a : $$(build_private_libdir)/sysbase.ji $$(JULIAHOME)/contrib/generate_precompile.jl $$(JULIAHOME)/contrib/ios/sysimage_env_init.jl $$(IOS_EXTRAS_STAMP)
 	$$(call check_host_julia)
 	@$$(call PRINT_JULIA, cd $$(JULIAHOME)/base && \
 	if ! $(HOST_JULIA_ENV) $(HOST_JULIA) $2 -C $(JULIA_CPU_TARGET) $$(HEAPLIM) \

@@ -34,6 +34,13 @@ Conventions for work on this branch:
 - One topical commit per change, each buildable on its own.
 - Comments describe the design as it stands and why it is that way, without
   narrating the change that produced it.
+- The squashed branch's commit message ends with a `[run-ios]` trailer, and it
+  is load-bearing: the iOS jobs are opt-in, and that marker is what opts them
+  in for a push.  Removing it leaves the pipeline reporting green off the
+  three cheap tiers while the two that build for iOS never run.  The other way
+  to opt in is the Actions tab, which needs a token carrying `actions: write`.
+- Iterate on the pre-squash branch: the workflow triggers on pushes to the
+  squashed branch only, so a push there costs the full multi-hour pipeline.
 
 ## New files
 
