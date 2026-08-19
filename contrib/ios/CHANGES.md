@@ -238,6 +238,42 @@ What this does not cover: anything that needs a subprocess (`spawn`,
 at all, and `Base.julia_cmd()` names an executable that is not in the bundle.
 Those test sets are excluded rather than expected to pass.
 
+### Open: `Base.names` fails under `--compile=min`
+
+Tier 2 does not pass yet.  `using Test` reaches `InteractiveUtils` →
+`Markdown` → `JuliaSyntaxHighlighting`, whose `BASE_TYPE_IDENTIFIERS` calls
+`names(Base, imported=true)`, and that raises
+
+    MethodError: no method matching sort!(::Vector{Symbol})
+
+only with `--compile=min`, and only against the cross-baked sysimage.  The
+`probe` driver (contrib/ios/simulator-runtests.c) narrows it in one run:
+
+| check | result |
+|---|---|
+| `hasmethod(sort!, Tuple{Vector{Symbol}})` | `true` |
+| `which(sort!, Tuple{Vector{Symbol}})` | `sort!(v::AbstractVector{T}; …) @ Base.Sort sort.jl:1733` |
+| `sort!(Symbol[:b, :a])` | works |
+| `Base.Sort.sort!(v, lo, hi, DEFAULT_STABLE, Forward)` | works |
+| `Base.unsorted_names(Base, imported=true)` | works, 1200 symbols |
+| `names(Base, imported=true)` | **MethodError** |
+
+So the method is present and callable; only the call *inside*
+`names(m::Module; kwargs...) = sort!(unsorted_names(m; kwargs...))`
+(base/runtime_internals.jl) fails.  Under the JIT the same sysimage resolves
+it, and the host reproduces neither mode's failure.
+
+The asymmetry worth chasing: runtime_internals.jl is included long before
+sort.jl, so `sort!` there is a `GlobalRef(Base, :sort!)` bound only once
+`Base.Sort` is in scope.  Compiling the body re-resolves that binding;
+interpreting it does not, and 1.12 gives bindings partitions with world
+ranges.  Not proven — no fix should be written against this paragraph without
+confirming it first.
+
+This is a bigger deal than the tests: on a device, everything outside the
+sysimage interprets, so any package whose load path reaches `names` (or
+another early-Base function calling a later-Base binding) would hit it.
+
 ## Known limitations
 
 - Simulator slices are arm64 only (Apple-silicon hosts).
