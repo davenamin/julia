@@ -84,6 +84,12 @@ static int fail(const char *what)
 // Print whatever Julia raised.  jl_stderr_stream() rather than the JL_STDERR
 // macro: that macro names a variable libjulia-internal does not re-export
 // through libjulia, which is the only library this links against.
+//
+// Via Julia's `showerror`, not `jl_static_show`.  static_show walks the entire
+// value with no depth or length bound, so a single MethodError carrying a big
+// array prints tens of thousands of `#<null>` lines and buries the message
+// that actually says what went wrong — which is exactly what it did the first
+// time a test run raised here.
 static void report_exception(const char *what)
 {
     JL_STREAM *out = jl_stderr_stream();
@@ -92,9 +98,27 @@ static void report_exception(const char *what)
         jl_printf(out, "%s: failed without raising\n", what);
         return;
     }
-    jl_printf(out, "%s: raised ", what);
-    jl_static_show(out, exc);
-    jl_printf(out, "\n");
+    jl_printf(out, "%s: raised\n", what);
+
+    // Root it first: jl_call replaces what jl_exception_occurred() returns.
+    JL_GC_PUSH1(&exc);
+    jl_function_t *showerror = jl_get_function(jl_base_module, "showerror");
+    int shown = 0;
+    if (showerror != NULL) {
+        jl_value_t *args[2] = { jl_stderr_obj(), exc };
+        jl_call(showerror, args, 2);
+        shown = (jl_exception_occurred() == NULL);
+        jl_printf(out, "\n");
+    }
+    if (!shown) {
+        // showerror needs working stdio and a callable path, neither of which
+        // is guaranteed when the failure was early.  The type name alone is
+        // always available, and is bounded.
+        jl_printf(out, "  (showerror failed) exception type: ");
+        jl_static_show(out, (jl_value_t*)jl_typeof(exc));
+        jl_printf(out, "\n");
+    }
+    JL_GC_POP();
 }
 
 static void usage(const char *argv0)

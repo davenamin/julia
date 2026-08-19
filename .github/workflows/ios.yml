@@ -254,6 +254,28 @@ jobs:
               goto some ordering osutils version meta
           rm -f test/ios_runtests.jl
 
+      # The same driver in tier 2's execution mode, which the step above does
+      # not cover: it runs under the host's JIT, so it says nothing about
+      # whether the suite survives interpretation.
+      #
+      #   --compile=min            everything outside the sysimage interprets,
+      #                            as on a device
+      #   --compiled-modules=existing  what julia_ios_init_with_paths sets, so
+      #                            Test and Printf load from source here too
+      #
+      # Still not iOS -- this has a julia executable and a writable tree - but
+      # it reproduces the two settings that make tier 2 different, in a job
+      # that finishes in minutes rather than after a bake and a simulator boot.
+      # Interpreted test sets are slow, so the selection is two small ones.
+      - name: iOS test driver runs under the interpreter
+        run: |
+          cp contrib/ios/ios_runtests.jl test/ios_runtests.jl
+          ./usr/bin/julia --startup-file=no --compile=min \
+              --compiled-modules=existing --check-bounds=yes --depwarn=error \
+              -e 'include("test/ios_runtests.jl"); exit(Main.IOS_TEST_FAILURES)' \
+              goto ordering
+          rm -f test/ios_runtests.jl
+
       # usr/share/julia/stdlib/vX.Y is a directory of symlinks into
       # stdlib/<Name>-<sha>, so usr/ alone is not a working prefix anywhere
       # else: the iOS jobs build out of tree and extract their own copies
