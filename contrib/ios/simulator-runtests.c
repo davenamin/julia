@@ -20,6 +20,11 @@
 //             process, every test set in sequence, no Distributed and no
 //             subprocesses — the only shape that could run on a device.
 //
+//   probe     no test file at all: a fixed diagnostic snippet, for narrowing a
+//             failure that only appears in one execution mode.  It needs no
+//             staged test tree, so it also works against a plain resources
+//             directory.
+//
 // and two execution modes:
 //
 //   jit       leave the JIT on.  Only the simulator can do this (it runs
@@ -121,15 +126,61 @@ static void report_exception(const char *what)
     JL_GC_POP();
 }
 
+// Diagnostic snippet for the `probe` driver.  Written as source and evaluated
+// at runtime so it is subject to whatever execution mode was selected, which
+// is the entire point: it exists to tell apart "the sysimage lacks a method"
+// from "dispatch fails only in this mode" from "only the caller's context
+// fails".  Each step is guarded so one failure does not hide the rest.
+//
+// The current subject is `sort!(::Vector{Symbol})`, which `Base.names` ends
+// with, and which raised MethodError under --compile=min while the same
+// sysimage under the JIT resolved it.
+static const char *probe_src =
+    "println(stderr, \"probe: compile_enabled = \", Base.JLOptions().compile_enabled)\n"
+    "println(stderr, \"probe: world = \", Base.get_world_counter())\n"
+    "try\n"
+    "    println(stderr, \"probe: hasmethod(sort!, Tuple{Vector{Symbol}}) = \",\n"
+    "            hasmethod(sort!, Tuple{Vector{Symbol}}))\n"
+    "catch e\n"
+    "    println(stderr, \"probe: hasmethod raised: \", sprint(showerror, e))\n"
+    "end\n"
+    "try\n"
+    "    println(stderr, \"probe: which = \", which(sort!, Tuple{Vector{Symbol}}))\n"
+    "catch e\n"
+    "    println(stderr, \"probe: which raised: \", sprint(showerror, e))\n"
+    "end\n"
+    "try\n"
+    "    v = Symbol[:b, :a]\n"
+    "    sort!(v)\n"
+    "    println(stderr, \"probe: sort! ok -> \", v)\n"
+    "catch e\n"
+    "    println(stderr, \"probe: sort! raised: \", sprint(showerror, e))\n"
+    "end\n"
+    "try\n"
+    "    println(stderr, \"probe: length(names(Base, imported=true)) = \",\n"
+    "            length(names(Base, imported=true)))\n"
+    "catch e\n"
+    "    println(stderr, \"probe: names raised: \", sprint(showerror, e))\n"
+    "end\n"
+    "try\n"
+    "    Core.eval(Main, :(using Markdown))\n"
+    "    println(stderr, \"probe: using Markdown ok\")\n"
+    "catch e\n"
+    "    println(stderr, \"probe: using Markdown raised: \", sprint(showerror, e))\n"
+    "end\n"
+    "nothing\n";
+
 static void usage(const char *argv0)
 {
     fprintf(stderr,
             "usage: %s <framework-dir> <resources-dir> <writable-depot> \\\n"
-            "           <runtests|ios> <jit|interp> [test selection...]\n"
+            "           <runtests|ios|probe> <jit|interp> [test selection...]\n"
             "\n"
             "The test selection is passed through to test/choosetests.jl, so\n"
             "\"--skip\", \"-name\" and \"--seed=\" work as documented there.\n"
-            "With the `runtests` driver it must name exactly one test set.\n",
+            "With the `runtests` driver it must name exactly one test set.\n"
+            "The `probe` driver ignores the selection and needs no staged\n"
+            "test tree; it runs a fixed diagnostic snippet.\n",
             argv0);
 }
 
@@ -150,6 +201,8 @@ int main(int argc, char **argv)
         driver_file = "runtests.jl";
     else if (strcmp(driver, "ios") == 0)
         driver_file = "ios_runtests.jl";
+    else if (strcmp(driver, "probe") == 0)
+        driver_file = NULL;          // no test file; see probe_src
     else {
         usage(argv[0]);
         return 2;
@@ -166,17 +219,23 @@ int main(int argc, char **argv)
 
     // The staged test tree, which build-xcframework.sh only produces under
     // IOS_STAGE_TESTS=1.  Check before starting the runtime so the failure
-    // names its cause instead of surfacing as a Julia `SystemError`.
+    // names its cause instead of surfacing as a Julia `SystemError`.  The
+    // probe driver reads no file, so it skips this entirely.
     char script[4096];
-    if (snprintf(script, sizeof(script), "%s/test/%s", resources, driver_file)
-            >= (int)sizeof(script))
-        return fail("resources path too long");
-    struct stat st;
-    if (stat(script, &st) != 0 || !S_ISREG(st.st_mode)) {
-        fprintf(stderr,
-                "simulator-runtests: no test driver at %s\n"
-                "  Re-stage the resources with IOS_STAGE_TESTS=1.\n", script);
-        return 1;
+    if (driver_file != NULL) {
+        if (snprintf(script, sizeof(script), "%s/test/%s", resources, driver_file)
+                >= (int)sizeof(script))
+            return fail("resources path too long");
+        struct stat st;
+        if (stat(script, &st) != 0 || !S_ISREG(st.st_mode)) {
+            fprintf(stderr,
+                    "simulator-runtests: no test driver at %s\n"
+                    "  Re-stage the resources with IOS_STAGE_TESTS=1.\n", script);
+            return 1;
+        }
+    }
+    else {
+        snprintf(script, sizeof(script), "<built-in diagnostic snippet>");
     }
 
     // What test/Makefile passes on the command line.  jl_options is
@@ -215,12 +274,17 @@ int main(int argc, char **argv)
     // exists, so creating one from C raises "Global Main.X does not exist and
     // cannot be assigned".
     int rc = 0;
-    jl_function_t *include_fn = jl_get_function(jl_base_module, "include");
-    jl_value_t *path = NULL;
-    JL_GC_PUSH1(&path);
-    path = jl_cstr_to_string(script);
-    jl_call2(include_fn, (jl_value_t*)jl_main_module, path);
-    JL_GC_POP();
+    if (driver_file == NULL) {
+        jl_eval_string(probe_src);
+    }
+    else {
+        jl_function_t *include_fn = jl_get_function(jl_base_module, "include");
+        jl_value_t *path = NULL;
+        JL_GC_PUSH1(&path);
+        path = jl_cstr_to_string(script);
+        jl_call2(include_fn, (jl_value_t*)jl_main_module, path);
+        JL_GC_POP();
+    }
     if (jl_exception_occurred()) {
         // Both drivers signal a failing run by raising: runtests.jl throws
         // Test.FallbackTestSetException, and anything else escaping means the

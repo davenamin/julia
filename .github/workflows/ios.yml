@@ -447,6 +447,27 @@ jobs:
                 "$PWD/ios-out/julia-runtime-resources" \
                 "$RUNNER_TEMP/depot"
 
+      # Narrows the one failure the two tiers disagree about.  Tier 2 dies
+      # loading Test from source under --compile=min, on
+      # `MethodError: no method matching sort!(::Vector{Symbol})` raised from
+      # `Base.names` inside JuliaSyntaxHighlighting -- while tier 1 loads the
+      # same chain under the JIT and passes, and the host reproduces neither.
+      # This runs the same question directly in both modes: does the method
+      # exist, does dispatch find it, does the call work in isolation.
+      # Informational, so it never fails the job.
+      - name: Probe the mode-dependent dispatch failure
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          for m in jit interp; do
+            echo "::group::probe ($m)"
+            env -u CI xcrun simctl spawn "$SIM_UDID" "$PWD/iostests" \
+                "$PWD/build-ios-sim/install/Frameworks" \
+                "$PWD/ios-out/julia-runtime-resources" \
+                "$RUNNER_TEMP/depot-probe-$m" probe "$m" || true
+            echo "::endgroup::"
+          done
+
       # Tier 1: upstream's own runner, against the staged tree, with the JIT
       # on.  One invocation per test name, because test/runtests.jl only
       # avoids `addprocs` — which would spawn a julia executable that does not
