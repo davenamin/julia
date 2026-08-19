@@ -447,6 +447,17 @@ else
     skip "workflow checks"
 fi
 
+# Julia 1.12 partitions bindings, and `jl_set_global` can only write one that
+# already exists -- creating a Main global from C raises "Global Main.X does
+# not exist and cannot be assigned" at runtime, with nothing at compile time
+# to say so.  Pass the value as a call argument instead (jl_call2 and friends).
+if out=$(grep -n "jl_set_global[[:space:]]*([[:space:]]*jl_main_module" contrib/ios/*.c 2>/dev/null); then
+    fail "jl_set_global cannot create a Main global under 1.12 binding partitions"
+    printf '%s\n' "$out" | sed 's/^/      /'
+else
+    pass "no C code creates a Main global with jl_set_global"
+fi
+
 # The test-suite harness resolves its driver by filename inside the staged
 # resources tree.  Nothing links the two, so check the names agree: a driver
 # the stager never copies fails only at the point of running it.

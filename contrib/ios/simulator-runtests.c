@@ -180,16 +180,23 @@ int main(int argc, char **argv)
         return fail("jl_set_ARGS");
     }
 
-    int rc = 0;
-    jl_value_t *path = jl_cstr_to_string(script);
-    JL_GC_PUSH1(&path);
-    jl_set_global(jl_main_module, jl_symbol("IOS_TEST_SCRIPT"), path);
-    JL_GC_POP();
-
     printf("simulator-runtests: %s driver, %s mode, %s\n", driver, mode, script);
     fflush(stdout);
 
-    jl_eval_string("Base.include(Main, Main.IOS_TEST_SCRIPT)");
+    // Call `Base.include(Main, script)` directly rather than composing Julia
+    // source around the path.  Two reasons: no quoting question about what a
+    // path may contain, and no new global.  Stashing the path in a Main global
+    // first is what the obvious version does, and 1.12's binding partitions
+    // reject it — `jl_set_global` can only write a binding that already
+    // exists, so creating one from C raises "Global Main.X does not exist and
+    // cannot be assigned".
+    int rc = 0;
+    jl_function_t *include_fn = jl_get_function(jl_base_module, "include");
+    jl_value_t *path = NULL;
+    JL_GC_PUSH1(&path);
+    path = jl_cstr_to_string(script);
+    jl_call2(include_fn, (jl_value_t*)jl_main_module, path);
+    JL_GC_POP();
     if (jl_exception_occurred()) {
         // Both drivers signal a failing run by raising: runtests.jl throws
         // Test.FallbackTestSetException, and anything else escaping means the

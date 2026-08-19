@@ -415,7 +415,12 @@ jobs:
       # `ccall` included; see src/interpreter-ccall.c).  This is the shape
       # that matters for the port, and it is why the selection is small:
       # interpreted test sets cost orders of magnitude more than compiled ones.
+      # Runs even when tier 1 failed.  The two exercise different execution
+      # modes, a full cycle here costs hours, and a tier 1 failure is often
+      # something tier 2 would not hit at all — so getting both signals from
+      # one run is worth more than stopping at the first.
       - name: "Tier 2: Julia's test suite under the interpreter"
+        if: ${{ !cancelled() }}
         env:
           TIER2_TESTS: "goto some ordering osutils version meta"
         run: |
