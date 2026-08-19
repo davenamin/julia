@@ -447,6 +447,39 @@ else
     skip "workflow checks"
 fi
 
+# Every step script is bash (the workflow sets `defaults.run.shell: bash`), and
+# a syntax error in one is only discovered by spending a runner on it.
+if command -v python3 >/dev/null 2>&1 &&
+   python3 -c 'import yaml' >/dev/null 2>&1; then
+    stepdir=$(mktemp -d)
+    python3 - "$stepdir" <<'STEPPY'
+import sys, os, yaml
+out = sys.argv[1]
+d = yaml.safe_load(open(".github/workflows/ios.yml"))
+for jname, job in d["jobs"].items():
+    for i, s in enumerate(job["steps"]):
+        run = s.get("run")
+        if not run:
+            continue
+        name = "%s-%02d-%s" % (jname, i, (s.get("name") or "unnamed"))
+        name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
+        open(os.path.join(out, name + ".sh"), "w").write(run)
+STEPPY
+    bad=0
+    for f in "$stepdir"/*.sh; do
+        [[ -f "$f" ]] || continue
+        if ! err=$(bash -n "$f" 2>&1); then
+            fail "workflow step $(basename "$f" .sh) is not valid bash"
+            printf '%s\n' "$err" | sed 's/^/      /'
+            bad=1
+        fi
+    done
+    [[ "$bad" -eq 0 ]] && pass "every ios.yml run: block parses as bash ($(ls "$stepdir" | wc -l | tr -d ' ') steps)"
+    rm -rf "$stepdir"
+else
+    skip "workflow step shell syntax (needs python3 + pyyaml)"
+fi
+
 # Julia 1.12 partitions bindings, and `jl_set_global` can only write one that
 # already exists -- creating a Main global from C raises "Global Main.X does
 # not exist and cannot be assigned" at runtime, with nothing at compile time

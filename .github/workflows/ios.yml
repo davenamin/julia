@@ -161,11 +161,44 @@ jobs:
         run: |
           set -o pipefail
           log="$RUNNER_TEMP/build.log"
+
+          # The same flake does not always FAIL the precompile phase -- it can
+          # HANG it.  `precompilepkgs` stops emitting after the failed
+          # configuration and never returns, leaving orphan julia processes
+          # behind, so `make` never exits, the retry below never runs, and one
+          # hang consumes the job's entire timeout-minutes budget.  Bound each
+          # attempt: a cached build finishes in about 20 minutes, so 50 leaves
+          # ample headroom and still fits three attempts.
+          attempt_timeout=$((50 * 60))
+
           for attempt in 1 2 3; do
-              if make JULIA_PRECOMPILE=0 VERBOSE=1 2>&1 | tee "$log"; then
+              ( set -o pipefail; make JULIA_PRECOMPILE=0 VERBOSE=1 2>&1 | tee "$log" ) &
+              build_pid=$!
+              ( sleep "$attempt_timeout"; kill -TERM "$build_pid" 2>/dev/null ) &
+              watchdog=$!
+              # `if wait`, not a bare `wait`: under `set -e` a bare wait on a
+              # child that exits nonzero aborts the script, and every retry
+              # path below depends on seeing that status.
+              if wait "$build_pid"; then rc=0; else rc=$?; fi
+              kill "$watchdog" 2>/dev/null || true
+              wait "$watchdog" 2>/dev/null || true
+
+              if [[ "$rc" -eq 0 ]]; then
                   [[ "$attempt" -gt 1 ]] && echo "::notice::build succeeded on attempt $attempt"
                   exit 0
               fi
+
+              if [[ "$rc" -eq 143 ]]; then
+                  # SIGTERM: the watchdog fired.  Killing the subshell orphans
+                  # make and its julia children rather than reaping them, and
+                  # those hold the depot locks a retry would wait on forever.
+                  echo "::warning::attempt $attempt exceeded ${attempt_timeout}s (precompile hang); killing strays and retrying"
+                  pkill -f "$PWD/usr/bin/julia" 2>/dev/null || true
+                  pkill -x make 2>/dev/null || true
+                  sleep 5
+                  continue
+              fi
+
               if ! grep -q 'Failed to precompile REPL' "$log" \
                  || ! grep -q 'Review REPL precompilation with debug_output on' "$log"; then
                   echo "::error::build failed for a reason other than the known REPL PTY flake"
@@ -173,7 +206,7 @@ jobs:
               fi
               echo "::warning::attempt $attempt hit the REPL fake-PTY transcript flake; retrying"
           done
-          echo "::error::REPL precompilation failed 3 times -- no longer plausibly a flake"
+          echo "::error::the build failed 3 times (REPL flake and/or precompile hang) -- no longer plausibly a flake"
           exit 1
 
       - name: Version
