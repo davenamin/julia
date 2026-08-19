@@ -271,20 +271,26 @@ jobs:
       # not cover: it runs under the host's JIT, so it says nothing about
       # whether the suite survives interpretation.
       #
-      #   --compile=min            everything outside the sysimage interprets,
-      #                            as on a device
-      #   --compiled-modules=existing  what julia_ios_init_with_paths sets, so
-      #                            Test and Printf load from source here too
+      #   --compile=min          everything outside the sysimage interprets,
+      #                          as on a device.
+      #   --compiled-modules=no  forces every `using` to load from SOURCE.
       #
-      # Still not iOS -- this has a julia executable and a writable tree - but
-      # it reproduces the two settings that make tier 2 different, in a job
-      # that finishes in minutes rather than after a bake and a simulator boot.
-      # Interpreted test sets are slow, so the selection is two small ones.
+      # That second flag has to be `no`, not the `existing` that
+      # julia_ios_init_with_paths sets.  They mean the same thing on iOS, where
+      # the bundle ships no cache files and `existing` therefore always falls
+      # through to source -- but not here, where the host depot is fully
+      # populated and `existing` loads Test from a cache, exercising nothing.
+      #
+      # Loading from source is where tier 2 actually broke (`using Test` pulls
+      # in InteractiveUtils, Markdown and JuliaSyntaxHighlighting), so it is
+      # the part that has to be reproduced.  Still not iOS -- this has a julia
+      # executable and a writable tree -- but it finishes in minutes rather
+      # than after a bake and a simulator boot.
       - name: iOS test driver runs under the interpreter
         run: |
           cp contrib/ios/ios_runtests.jl test/ios_runtests.jl
           ./usr/bin/julia --startup-file=no --compile=min \
-              --compiled-modules=existing --check-bounds=yes --depwarn=error \
+              --compiled-modules=no --check-bounds=yes --depwarn=error \
               -e 'include("test/ios_runtests.jl"); exit(Main.IOS_TEST_FAILURES)' \
               goto ordering
           rm -f test/ios_runtests.jl
