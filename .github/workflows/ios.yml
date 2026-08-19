@@ -174,24 +174,37 @@ jobs:
           for attempt in 1 2 3; do
               ( set -o pipefail; make JULIA_PRECOMPILE=0 VERBOSE=1 2>&1 | tee "$log" ) &
               build_pid=$!
-              ( sleep "$attempt_timeout"; kill -TERM "$build_pid" 2>/dev/null ) &
-              watchdog=$!
+
+              # Watch it from the foreground rather than backgrounding a
+              # watchdog: a backgrounded `sleep` outlives the step whichever way
+              # the attempt ends, and the runner reports it under "Terminate
+              # orphan process" -- noise that would hide a real stray.  This
+              # also makes the timeout an explicit flag instead of something
+              # inferred from an exit status that SIGTERM shares.
+              deadline=$(( $(date +%s) + attempt_timeout ))
+              timed_out=0
+              while kill -0 "$build_pid" 2>/dev/null; do
+                  if [[ "$(date +%s)" -ge "$deadline" ]]; then
+                      kill -TERM "$build_pid" 2>/dev/null || true
+                      timed_out=1
+                      break
+                  fi
+                  sleep 5
+              done
               # `if wait`, not a bare `wait`: under `set -e` a bare wait on a
               # child that exits nonzero aborts the script, and every retry
               # path below depends on seeing that status.
               if wait "$build_pid"; then rc=0; else rc=$?; fi
-              kill "$watchdog" 2>/dev/null || true
-              wait "$watchdog" 2>/dev/null || true
 
               if [[ "$rc" -eq 0 ]]; then
                   [[ "$attempt" -gt 1 ]] && echo "::notice::build succeeded on attempt $attempt"
                   exit 0
               fi
 
-              if [[ "$rc" -eq 143 ]]; then
-                  # SIGTERM: the watchdog fired.  Killing the subshell orphans
-                  # make and its julia children rather than reaping them, and
-                  # those hold the depot locks a retry would wait on forever.
+              if [[ "$timed_out" -eq 1 ]]; then
+                  # Killing the subshell orphans make and its julia children
+                  # rather than reaping them, and those hold the depot locks a
+                  # retry would wait on forever.
                   echo "::warning::attempt $attempt exceeded ${attempt_timeout}s (precompile hang); killing strays and retrying"
                   pkill -f "$PWD/usr/bin/julia" 2>/dev/null || true
                   pkill -x make 2>/dev/null || true
