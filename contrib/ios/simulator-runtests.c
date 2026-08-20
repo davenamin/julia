@@ -186,11 +186,51 @@ static const char *probe_src =
     "catch e\n"
     "    println(stderr, \"probe: unsorted_names raised: \", sprint(showerror, e))\n"
     "end\n"
+    // The same composition `names` performs, but written here rather than
+    // called through it.  If this works while `names` does not, the fault is
+    // tied to that method body, not to the operation.
+    "try\n"
+    "    x = Base.unsorted_names(Base, imported=true)\n"
+    "    sort!(x)\n"
+    "    println(stderr, \"probe: top-level sort!(unsorted_names(...)) ok, n = \", length(x))\n"
+    "catch e\n"
+    "    println(stderr, \"probe: top-level composition raised: \", sprint(showerror, e))\n"
+    "end\n"
+    // Dissect the exception rather than render it.  `f` says whether dispatch
+    // failed on sort! itself or on Core.kwcall (kwerr), and `world` separates
+    // a hand-constructed MethodError (typemax) from one carrying a real world
+    // age -- which, compared against the current and task-local ages, says
+    // whether the body ran at a stale world.
     "try\n"
     "    println(stderr, \"probe: length(names(Base, imported=true)) = \",\n"
     "            length(names(Base, imported=true)))\n"
     "catch e\n"
-    "    println(stderr, \"probe: names raised: \", sprint(showerror, e))\n"
+    "    if e isa MethodError\n"
+    "        println(stderr, \"probe: names MethodError.f    = \", e.f, \" :: \", typeof(e.f))\n"
+    "        println(stderr, \"probe: names MethodError.args = \", map(typeof, e.args))\n"
+    "        println(stderr, \"probe: names MethodError.world= \", e.world,\n"
+    "                \"  (typemax = \", e.world == typemax(UInt), \")\")\n"
+    "        println(stderr, \"probe: current world = \", Base.get_world_counter(),\n"
+    "                \"  tls world = \", Base.tls_world_age())\n"
+    "        if e.world != typemax(UInt)\n"
+    "            try\n"
+    "                println(stderr, \"probe: hasmethod at ex.world = \",\n"
+    "                        hasmethod(sort!, Tuple{Vector{Symbol}}, world=e.world))\n"
+    "            catch e2\n"
+    "                println(stderr, \"probe: hasmethod at ex.world raised: \", sprint(showerror, e2))\n"
+    "            end\n"
+    "        end\n"
+    "    else\n"
+    "        println(stderr, \"probe: names raised \", typeof(e), \": \", sprint(showerror, e))\n"
+    "    end\n"
+    "end\n"
+    // Same call, forced into the latest world.  If this succeeds where the
+    // plain call fails, the caller's world age is the whole story.
+    "try\n"
+    "    println(stderr, \"probe: invokelatest names = \",\n"
+    "            length(Base.invokelatest(names, Base; imported=true)))\n"
+    "catch e\n"
+    "    println(stderr, \"probe: invokelatest names raised: \", sprint(showerror, e))\n"
     "end\n"
     "try\n"
     "    Core.eval(Main, :(using Markdown))\n"
