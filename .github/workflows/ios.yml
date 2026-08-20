@@ -384,6 +384,13 @@ jobs:
           rm -rf "build-ios-sim/usr/manifest/$v" \
                  "build-ios-sim/usr/share/julia/stdlib/$v"
 
+      # IOS_SYSIMAGE_COMPILE_ALL changes a bake flag, not a file, so make has
+      # no way to know an already-built sysimage is stale.  Drop stage 3's
+      # outputs so the image is definitely produced under the flags in force
+      # now -- otherwise the experiment could "pass" having tested nothing.
+      - name: Force a fresh sysimage bake
+        run: rm -f build-ios-sim/usr/lib/julia/sys*-o.a build-ios-sim/usr/lib/julia/sys*.dylib
+
       - name: Build the simulator slice
         env:
           SLICES: iphonesimulator
@@ -391,6 +398,15 @@ jobs:
           # below have something to run.  Off by default: a shipping app has
           # no reason to carry the suite.
           IOS_STAGE_TESTS: 1
+          # EXPERIMENT, not a settled default.  Tier 2 fails on
+          # `MethodError: no method matching sort!(::Vector{Symbol})` from
+          # `Base.names`, only under --compile=min and only against this
+          # sysimage.  Stage 3's --compile=all is what bakes the unspecialized
+          # entries that --compile=min then runs instead of interpreting
+          # (see sysimage-ios.mk), which is the one mechanism consistent with
+          # every observation.  Baking without it is the single-variable test:
+          # if tier 2 goes green here, that is causation, not correlation.
+          IOS_SYSIMAGE_COMPILE_ALL: 0
         run: contrib/ios/build-xcframework.sh "$PWD/ios-out"
 
       - name: Sysimage is an iOS-simulator arm64 Mach-O

@@ -286,12 +286,35 @@ else
 IOS_EXTRAS_STAMP :=
 endif
 
+# Stage 3 is the `--output-o` stage, and it is where `--compile=all` has its
+# real effect: src/staticdata.c calls
+# `jl_precompile(jl_options.compile_enabled == JL_OPTIONS_COMPILE_ALL, ...)`,
+# and with that flag `jl_compile_all_defs` (src/precompile_utils.c) bakes a
+# compiled *unspecialized* entry for every method whose signature is not
+# concretely compilable, on top of the ordinary specializations.
+#
+# On device that is the point: nothing outside the sysimage can be compiled,
+# so a method with no baked entry can only interpret -- and a method the
+# interpreter cannot run at all would have nowhere to go.
+#
+# It is not free, though.  At runtime under --compile=min, src/gf.c *prefers*
+# `def->unspecialized`'s baked code over interpreting, so this flag decides
+# which of the two a device actually executes.  IOS_SYSIMAGE_COMPILE_ALL=0
+# bakes without it, for bisecting a failure that appears only under
+# --compile=min.
+IOS_SYSIMAGE_COMPILE_ALL ?= 1
+ifeq ($(IOS_SYSIMAGE_COMPILE_ALL),1)
+IOS_STAGE3_COMPILE := --compile=all
+else
+IOS_STAGE3_COMPILE :=
+endif
+
 define sysimg_ios_builder
 $$(build_private_libdir)/sys$1-o.a : $$(build_private_libdir)/sysbase.ji $$(JULIAHOME)/contrib/generate_precompile.jl $$(JULIAHOME)/contrib/ios/sysimage_env_init.jl $$(IOS_EXTRAS_STAMP)
 	$$(call check_host_julia)
 	@$$(call PRINT_JULIA, cd $$(JULIAHOME)/base && \
 	if ! $(HOST_JULIA_ENV) $(HOST_JULIA) $2 -C $(JULIA_CPU_TARGET) $$(HEAPLIM) \
-			--compile=all \
+			$(IOS_STAGE3_COMPILE) \
 			--pkgimages=no \
 			--target=$(IOS_TRIPLE) \
 			--output-o $$@.tmp $$(JULIA_SYSIMG_BUILD_FLAGS) \
