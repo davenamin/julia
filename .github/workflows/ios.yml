@@ -433,7 +433,20 @@ jobs:
           # below have something to run.  Off by default: a shipping app has
           # no reason to carry the suite.
           IOS_STAGE_TESTS: 1
+          # EXPERIMENT, not a default change.  With the gf.c stale-unspecialized
+          # fix in place, --compile=all is usable again, and it is what a device
+          # wants: nothing outside the sysimage can be compiled there.  Measured
+          # on the host it buys ~5x on interpreted execution (110s -> 22s over 12
+          # test sets) for ~2x sysimage size.  This run measures both on the real
+          # target -- tier 2's wall time, and the size report below.
+          IOS_SYSIMAGE_COMPILE_ALL: 1
         run: contrib/ios/build-xcframework.sh "$PWD/ios-out"
+
+      - name: Sysimage size (--compile=all experiment)
+        run: |
+          sz=$(stat -f%z build-ios-sim/usr/lib/julia/sys.dylib 2>/dev/null \
+               || stat -c%s build-ios-sim/usr/lib/julia/sys.dylib)
+          echo "::notice::simulator sys.dylib = $((sz/1048576)) MB (IOS_SYSIMAGE_COMPILE_ALL=${IOS_SYSIMAGE_COMPILE_ALL:-0})"
 
       - name: Sysimage is an iOS-simulator arm64 Mach-O
         run: |
