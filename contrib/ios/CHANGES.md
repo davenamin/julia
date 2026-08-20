@@ -294,7 +294,28 @@ and dropping the flag is avoiding a broken code path rather than working
 around a cross-compilation quirk.  `IOS_SYSIMAGE_COMPILE_ALL=1` or `HOST_SYSIMAGE_COMPILE_ALL=1` reproduces on
 demand.
 
-#### The mechanism
+#### The defect, and the fix
+
+`src/gf.c`'s `--compile=min`/`off` fast path took `def->unspecialized`'s cache
+chain **head** with no world check, then wrapped that fptr in a CodeInstance
+declared valid for worlds `1..~0`.  `println(::IO)` carries two entries in a
+`--compile=all` image:
+
+    CodeInstance[0] rettype=Union{}  worlds=843:15810
+    CodeInstance[1] rettype=Nothing  worlds=15933:...
+
+Entry 0 was *correct* at world 843 -- coreio.jl is included long before
+`print(::IO, ::String)` exists, so "never returns" was true then -- and it
+expired at 15810.  Being the head of the chain, it is what the fast path
+picked.  The fix walks the chain for an entry whose world range contains the
+current world; with none, the existing interpreter/compile fallback runs.
+
+That is a general runtime fix, not an iOS one, and it makes
+`IOS_SYSIMAGE_COMPILE_ALL=1` viable again -- worth measuring, since baking
+generic entries is exactly what a device wants.  The default stays 0 until
+that is verified on a full pipeline.
+
+#### How it presents
 
 Run under a debugger, the fault is not a wild jump -- it is a deliberate trap:
 
