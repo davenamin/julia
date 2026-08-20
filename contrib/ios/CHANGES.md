@@ -272,7 +272,7 @@ Still unexplained at the level that would justify a runtime patch: *why* the
 baked unspecialized entry mis-dispatches. Setting
 `IOS_SYSIMAGE_COMPILE_ALL=1` reproduces it.
 
-### Open: interpreted `ccall` ignored static parameters
+### Resolved: interpreted `ccall` ignored static parameters
 
 Running tier 2 surfaced a second defect, in this port's own code:
 
@@ -290,8 +290,9 @@ compared against a `TypeVar` and rejected a correct result.  It was not fatal
 went unnoticed: parsing silently degrades on device.
 
 src/interpreter.c now performs the same substitution before calling
-`jl_interpret_foreigncall`.  Awaiting confirmation from a simulator run that
-the fallback message is gone.
+`jl_interpret_foreigncall`.  Confirmed in the simulator: the probe run that
+previously emitted several "falling back to flisp" blocks emits none, so
+JuliaSyntax parses natively under `--compile=min` again.
 
 ## Known limitations
 
