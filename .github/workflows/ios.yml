@@ -331,8 +331,12 @@ jobs:
           # Both must go: the flag lives in the sys-o.a rule, so leaving the
           # archive in place would relink the old image and prove nothing.
           rm -f usr/lib/julia/sys-o.a usr/lib/julia/sys.dylib usr/lib/julia/sys.so
-          make JULIA_PRECOMPILE=0 HOST_SYSIMAGE_COMPILE_ALL=1 VERBOSE=1 \
-               usr/lib/julia/sys.dylib 2>&1 | tee "$log"
+          # sysimage.mk is not included by the top-level Makefile, so its
+          # targets are only reachable the way Makefile's julia-sysimg-% rule
+          # reaches them.  Rebuilding just this target also avoids re-running
+          # the stdlib precompile phase.
+          make -C . -f sysimage.mk sysimg-release \
+               JULIA_PRECOMPILE=0 HOST_SYSIMAGE_COMPILE_ALL=1 VERBOSE=1 2>&1 | tee "$log"
           # Guard against concluding anything from a build that never saw the
           # flag -- the whole experiment is worthless if this silently no-ops.
           grep -q -- '--compile=all' "$log" || {
