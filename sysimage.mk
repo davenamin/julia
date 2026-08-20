@@ -103,11 +103,18 @@ endef
 # Diagnostic knob, default off.  Adding --compile=all to the --output-o stage
 # below makes jl_precompile bake a compiled *unspecialized* entry for every
 # method whose signature is not concretely compilable (jl_compile_all_defs in
-# src/precompile_utils.c) -- exactly what the iOS bake used to do, and what
-# broke running under --compile=min there.  Setting this to 1 reproduces that
-# condition on an ordinary host build, with no cross-compilation in the
-# picture, which is what separates "iOS/--target bug" from "general Julia bug".
-# See contrib/ios/CHANGES.md.
+# src/precompile_utils.c) -- exactly what the iOS bake does under
+# IOS_SYSIMAGE_COMPILE_ALL=1, and what used to break running under
+# --compile=min there.  Setting this to 1 reproduces that condition on an
+# ordinary host build, with no cross-compilation in the picture, which is what
+# separated "iOS/--target bug" from "general Julia bug".
+#
+# It was the latter: src/gf.c took the head of the unspecialized CodeInstance
+# chain without checking world age, and picked up a `println(::IO)` entry
+# inferred `Union{}` during bootstrap, whose body traps.  Reproduced on macOS
+# arm64 and Linux x86-64.  gf.c now checks the world, and the host CI job runs
+# this knob as a regression test that fails if the SIGILL returns.  See
+# contrib/ios/CHANGES.md.
 HOST_SYSIMAGE_COMPILE_ALL ?= 0
 ifeq ($(HOST_SYSIMAGE_COMPILE_ALL),1)
 HOST_SYSIMG_COMPILE := --compile=all

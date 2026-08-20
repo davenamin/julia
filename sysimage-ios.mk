@@ -293,32 +293,47 @@ endif
 # compiled *unspecialized* entry for every method whose signature is not
 # concretely compilable, on top of the ordinary specializations.
 #
-# That sounds like exactly what a device wants -- nothing outside the sysimage
-# can be compiled there -- but it is off, because those entries are WRONG.
+# That is what a device wants -- nothing outside the sysimage can be compiled
+# there, so a method with an abstract signature otherwise has to interpret.
+# It is nonetheless OFF by default, on size grounds alone; the correctness
+# problem it used to have is fixed.
 #
-# At runtime under --compile=min, src/gf.c prefers `def->unspecialized`'s baked
-# code over interpreting.  So on device this flag does not add a fallback; it
-# decides which of the two runs, and the baked one misbehaves: `using Test`
-# died on `MethodError: no method matching sort!(::Vector{Symbol})` raised
-# from `Base.names`, whose kwbody takes `Pairs` and so gets the unspecialized
-# entry rather than a real specialization.  Baking without the flag, and
-# changing nothing else, made that call work and turned the interpreted test
-# tier green -- see contrib/ios/CHANGES.md.
+# The history matters, because the flag looks innocent and is not.  At runtime
+# under --compile=min, src/gf.c prefers `def->unspecialized`'s baked code over
+# interpreting -- so on device this flag does not add a fallback, it decides
+# which of the two runs.  It used to select a broken one: gf.c took the HEAD of
+# the unspecialized method instance's CodeInstance chain with no world-age
+# check, and the image carries a `println(::IO)` entry inferred `Union{}`,
+# valid only in [843, 15810] -- correct when it was made, during bootstrap,
+# before `print(::IO, ::String)` existed.  Its body is `call ijl_apply_generic`
+# followed by `ud2`; the call returns and control walks into the trap.
+# --compile=all is what attaches native code to that entry, so without the flag
+# `invoke` is NULL and the interpreter runs instead.  Symptoms ranged from
+# `using Test` dying on `MethodError: no method matching sort!(::Vector{Symbol})`
+# to an outright SIGILL ("Unreachable reached at 0x...").
 #
-# What it costs: a method with an abstract signature no longer has a generic
+# src/gf.c now walks the chain for an entry valid in `world`.  That fix is
+# unconditional and independent of this flag.  The fault needed BOTH a
+# --compile=all bake and a --compile=min run, which is why it never appeared on
+# an ordinary host build; sysimage.mk's HOST_SYSIMAGE_COMPILE_ALL reproduces
+# the same pairing with no cross-compilation involved, and the host CI job
+# keeps it as a regression test.  See contrib/ios/CHANGES.md.
+#
+# What leaving it off costs: a method with an abstract signature has no generic
 # compiled entry, so on device it interprets rather than running native code.
-# Slower, not broken.  Nothing loses its only way to run: since a plain `ccall`
-# is interpretable here (src/interpreter-ccall.c), `jl_code_requires_compiler`
-# now only forces codegen for `@cfunction`, which cannot work on a device
-# anyway.  Ordinary specializations are unaffected -- jl_compile_all_defs bakes
-# those with or without the flag.
+# Slower, not broken -- measured at roughly 5x on an interpreted test run.
+# Nothing loses its only way to run: since a plain `ccall` is interpretable here
+# (src/interpreter-ccall.c), `jl_code_requires_compiler` now only forces codegen
+# for `@cfunction`, which cannot work on a device anyway.  Ordinary
+# specializations are unaffected -- jl_compile_all_defs bakes those with or
+# without the flag.
 #
-# Set IOS_SYSIMAGE_COMPILE_ALL=1 to bake them again (to re-examine the
-# underlying defect, which is not yet explained at the level of why the
-# unspecialized entry mis-dispatches).  Changing it does not invalidate an
-# existing sysimage, so delete build-ios-*/usr/lib/julia/sys*-o.a and
-# sys*.$(SHLIB_EXT) first or the bake will be reused and the change tested
-# nothing.
+# What turning it on costs: about +57 MB on the shipped xcframework (112.7 ->
+# 169.8 MB measured on the simulator slice), and a sysimage around 359 MB.
+# Whether that fits is an App Store download-budget question, not a technical
+# one, hence the default.  Changing it does not invalidate an existing sysimage,
+# so delete build-ios-*/usr/lib/julia/sys*-o.a and sys*.$(SHLIB_EXT) first or
+# the bake will be reused and the change tested nothing.
 IOS_SYSIMAGE_COMPILE_ALL ?= 0
 ifeq ($(IOS_SYSIMAGE_COMPILE_ALL),1)
 IOS_STAGE3_COMPILE := --compile=all
