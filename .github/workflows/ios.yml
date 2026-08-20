@@ -384,13 +384,6 @@ jobs:
           rm -rf "build-ios-sim/usr/manifest/$v" \
                  "build-ios-sim/usr/share/julia/stdlib/$v"
 
-      # IOS_SYSIMAGE_COMPILE_ALL changes a bake flag, not a file, so make has
-      # no way to know an already-built sysimage is stale.  Drop stage 3's
-      # outputs so the image is definitely produced under the flags in force
-      # now -- otherwise the experiment could "pass" having tested nothing.
-      - name: Force a fresh sysimage bake
-        run: rm -f build-ios-sim/usr/lib/julia/sys*-o.a build-ios-sim/usr/lib/julia/sys*.dylib
-
       - name: Build the simulator slice
         env:
           SLICES: iphonesimulator
@@ -398,15 +391,6 @@ jobs:
           # below have something to run.  Off by default: a shipping app has
           # no reason to carry the suite.
           IOS_STAGE_TESTS: 1
-          # EXPERIMENT, not a settled default.  Tier 2 fails on
-          # `MethodError: no method matching sort!(::Vector{Symbol})` from
-          # `Base.names`, only under --compile=min and only against this
-          # sysimage.  Stage 3's --compile=all is what bakes the unspecialized
-          # entries that --compile=min then runs instead of interpreting
-          # (see sysimage-ios.mk), which is the one mechanism consistent with
-          # every observation.  Baking without it is the single-variable test:
-          # if tier 2 goes green here, that is causation, not correlation.
-          IOS_SYSIMAGE_COMPILE_ALL: 0
         run: contrib/ios/build-xcframework.sh "$PWD/ios-out"
 
       - name: Sysimage is an iOS-simulator arm64 Mach-O
@@ -514,10 +498,20 @@ jobs:
         env:
           TIER2_TESTS: "goto some ordering osutils version meta"
         run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/tier2.log"
           env -u CI xcrun simctl spawn "$SIM_UDID" "$PWD/iostests" \
               "$PWD/build-ios-sim/install/Frameworks" \
               "$PWD/ios-out/julia-runtime-resources" \
-              "$RUNNER_TEMP/depot-tests-interp" ios interp $TIER2_TESTS
+              "$RUNNER_TEMP/depot-tests-interp" ios interp $TIER2_TESTS 2>&1 | tee "$log"
+          # The driver reports 0 failures whether it ran every test set or none
+          # of them, so a green step is not by itself evidence that anything
+          # ran.  Require the summary to account for the whole selection.
+          want=$(printf '%s\n' $TIER2_TESTS | grep -c .)
+          grep -q "ios_runtests: $want/$want test set(s) passed" "$log" || {
+            echo "::error::tier 2 exited 0 without reporting $want/$want passed"
+            exit 1
+          }
 
       # Narrows the one failure the two tiers disagree about.  Tier 2 dies
       # loading Test from source under --compile=min, on

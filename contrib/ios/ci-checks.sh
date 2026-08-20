@@ -307,7 +307,11 @@ else
     # the simulator harness are compiled by an app target and by the simulator
     # job and by nothing else, the same position the `_OS_IOS_` regions are in.
     judged=0
-    for f in $(grep -lE '_OS_IOS_|JL_CCALL_FFI' src/*.c src/*.cpp 2>/dev/null) \
+    # `jl_foreigncall_interpretable` catches the files that take part in the
+    # interpreted-ccall path without carrying an iOS macro themselves --
+    # src/interpreter.c and src/toplevel.c.  Both are edited by this fork, and
+    # neither was covered while the pattern only looked for _OS_IOS_.
+    for f in $(grep -lE '_OS_IOS_|JL_CCALL_FFI|jl_foreigncall_interpretable' src/*.c src/*.cpp 2>/dev/null) \
              contrib/ios/*.c; do
         [[ -f "$f" ]] || continue
         case "$f" in

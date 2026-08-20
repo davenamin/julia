@@ -372,13 +372,48 @@ static jl_value_t *eval_value(jl_value_t *e, interpreter_state *s)
         size_t nccallargs = jl_is_svec(at) ? jl_svec_len(at) : 0;
         jl_value_t **argv;
         // One extra slot for the callee expression, which may need evaluating
-        // (a runtime pointer) rather than being a literal symbol.
-        JL_GC_PUSHARGS(argv, nccallargs + 1);
+        // (a runtime pointer) rather than being a literal symbol, plus two to
+        // root the static-parameter-substituted rt/at below.
+        JL_GC_PUSHARGS(argv, nccallargs + 3);
         argv[0] = NULL;
         if (!jl_is_quotenode(args[0]))
             argv[0] = eval_value(args[0], s);
         for (size_t i = 0; i < nccallargs; i++)
             argv[i + 1] = eval_value(args[5 + i], s);
+
+        // Substitute this method's static parameters into the declared types.
+        // `jl_resolve_globals` has already turned rt/at into types, but inside
+        // a `where {T}` method they can still carry T as a free typevar --
+        // `unsafe_wrap`'s `ccall(:jl_ptr_to_array_1d, Array{T,1}, ...)` in
+        // base/pointer.jl is the one that shows up first.  Codegen instantiates
+        // them (src/ccall.cpp); without the same step here the return-value
+        // check compares against a TypeVar and rejects a correct result with
+        // "in ccall return value, expected Array{T, 1}, got Vector{UInt8}".
+        if (s->mi != NULL && jl_is_method(s->mi->def.value) &&
+                s->sparam_vals != NULL && jl_svec_len(s->sparam_vals) > 0) {
+            jl_unionall_t *env = (jl_unionall_t*)s->mi->def.method->sig;
+            if (jl_is_unionall((jl_value_t*)env)) {
+                if (jl_has_typevar_from_unionall(rt, env)) {
+                    rt = jl_instantiate_type_in_env(rt, env, jl_svec_data(s->sparam_vals));
+                    argv[nccallargs + 1] = rt;
+                }
+                jl_svec_t *at2 = NULL;
+                for (size_t i = 0; i < nccallargs; i++) {
+                    jl_value_t *ty = jl_svecref(at, i);
+                    if (!jl_has_typevar_from_unionall(ty, env))
+                        continue;
+                    if (at2 == NULL) {
+                        at2 = jl_svec_copy((jl_svec_t*)at);
+                        argv[nccallargs + 2] = (jl_value_t*)at2;
+                    }
+                    jl_svecset(at2, i,
+                               jl_instantiate_type_in_env(ty, env, jl_svec_data(s->sparam_vals)));
+                }
+                if (at2 != NULL)
+                    at = (jl_value_t*)at2;
+            }
+        }
+
         jl_value_t *v = jl_interpret_foreigncall(args[0], argv[0], rt, (jl_svec_t*)at,
                                                  nreq, cc, argv + 1, nccallargs);
         JL_GC_POP();

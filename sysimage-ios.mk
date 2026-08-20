@@ -293,16 +293,33 @@ endif
 # compiled *unspecialized* entry for every method whose signature is not
 # concretely compilable, on top of the ordinary specializations.
 #
-# On device that is the point: nothing outside the sysimage can be compiled,
-# so a method with no baked entry can only interpret -- and a method the
-# interpreter cannot run at all would have nowhere to go.
+# That sounds like exactly what a device wants -- nothing outside the sysimage
+# can be compiled there -- but it is off, because those entries are WRONG.
 #
-# It is not free, though.  At runtime under --compile=min, src/gf.c *prefers*
-# `def->unspecialized`'s baked code over interpreting, so this flag decides
-# which of the two a device actually executes.  IOS_SYSIMAGE_COMPILE_ALL=0
-# bakes without it, for bisecting a failure that appears only under
-# --compile=min.
-IOS_SYSIMAGE_COMPILE_ALL ?= 1
+# At runtime under --compile=min, src/gf.c prefers `def->unspecialized`'s baked
+# code over interpreting.  So on device this flag does not add a fallback; it
+# decides which of the two runs, and the baked one misbehaves: `using Test`
+# died on `MethodError: no method matching sort!(::Vector{Symbol})` raised
+# from `Base.names`, whose kwbody takes `Pairs` and so gets the unspecialized
+# entry rather than a real specialization.  Baking without the flag, and
+# changing nothing else, made that call work and turned the interpreted test
+# tier green -- see contrib/ios/CHANGES.md.
+#
+# What it costs: a method with an abstract signature no longer has a generic
+# compiled entry, so on device it interprets rather than running native code.
+# Slower, not broken.  Nothing loses its only way to run: since a plain `ccall`
+# is interpretable here (src/interpreter-ccall.c), `jl_code_requires_compiler`
+# now only forces codegen for `@cfunction`, which cannot work on a device
+# anyway.  Ordinary specializations are unaffected -- jl_compile_all_defs bakes
+# those with or without the flag.
+#
+# Set IOS_SYSIMAGE_COMPILE_ALL=1 to bake them again (to re-examine the
+# underlying defect, which is not yet explained at the level of why the
+# unspecialized entry mis-dispatches).  Changing it does not invalidate an
+# existing sysimage, so delete build-ios-*/usr/lib/julia/sys*-o.a and
+# sys*.$(SHLIB_EXT) first or the bake will be reused and the change tested
+# nothing.
+IOS_SYSIMAGE_COMPILE_ALL ?= 0
 ifeq ($(IOS_SYSIMAGE_COMPILE_ALL),1)
 IOS_STAGE3_COMPILE := --compile=all
 else

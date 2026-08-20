@@ -238,41 +238,60 @@ What this does not cover: anything that needs a subprocess (`spawn`,
 at all, and `Base.julia_cmd()` names an executable that is not in the bundle.
 Those test sets are excluded rather than expected to pass.
 
-### Open: `Base.names` fails under `--compile=min`
+### Resolved: stage 3's `--compile=all` broke `--compile=min`
 
-Tier 2 does not pass yet.  `using Test` reaches `InteractiveUtils` →
-`Markdown` → `JuliaSyntaxHighlighting`, whose `BASE_TYPE_IDENTIFIERS` calls
-`names(Base, imported=true)`, and that raises
+Tier 2 used to die in `using Test` on
 
     MethodError: no method matching sort!(::Vector{Symbol})
 
-only with `--compile=min`, and only against the cross-baked sysimage.  The
-`probe` driver (contrib/ios/simulator-runtests.c) narrows it in one run:
+raised from `Base.names`, only under `--compile=min` and only against the
+cross-baked sysimage.  The cause was this port's own bake flag.
 
-| check | result |
-|---|---|
-| `hasmethod(sort!, Tuple{Vector{Symbol}})` | `true` |
-| `which(sort!, Tuple{Vector{Symbol}})` | `sort!(v::AbstractVector{T}; …) @ Base.Sort sort.jl:1733` |
-| `sort!(Symbol[:b, :a])` | works |
-| `Base.Sort.sort!(v, lo, hi, DEFAULT_STABLE, Forward)` | works |
-| `Base.unsorted_names(Base, imported=true)` | works, 1200 symbols |
-| `names(Base, imported=true)` | **MethodError** |
+`--compile=all` on stage 3 (the `--output-o` stage) makes `src/staticdata.c`
+call `jl_precompile(all=1, ...)`, and `jl_compile_all_defs`
+(src/precompile_utils.c) then bakes a compiled *unspecialized* entry for every
+method whose signature is not concretely compilable.  At runtime `src/gf.c`
+**prefers** `def->unspecialized` over interpreting whenever `--compile=min` is
+in force -- so the flag does not add a fallback on device, it decides which of
+the two runs, and the baked entry mis-dispatches.
 
-So the method is present and callable; only the call *inside*
-`names(m::Module; kwargs...) = sort!(unsorted_names(m; kwargs...))`
-(base/runtime_internals.jl) fails.  Under the JIT the same sysimage resolves
-it, and the host reproduces neither mode's failure.
+The `probe` driver (contrib/ios/simulator-runtests.c) isolated it: with the
+flag, `hasmethod` was true, `which` resolved sort.jl:1733, calling `sort!` on
+a `Vector{Symbol}` worked, `Base.unsorted_names` worked, and only `names` --
+whose kwbody takes `Pairs` and so gets the unspecialized entry rather than a
+real specialization -- failed.  Baking without the flag and changing nothing
+else turned all of it green.
 
-The asymmetry worth chasing: runtime_internals.jl is included long before
-sort.jl, so `sort!` there is a `GlobalRef(Base, :sort!)` bound only once
-`Base.Sort` is in scope.  Compiling the body re-resolves that binding;
-interpreting it does not, and 1.12 gives bindings partitions with world
-ranges.  Not proven — no fix should be written against this paragraph without
-confirming it first.
+`IOS_SYSIMAGE_COMPILE_ALL` now defaults to 0.  The cost is that a method with
+an abstract signature interprets on device instead of running a generic
+compiled entry; nothing loses its only way to run, because a plain `ccall` is
+interpretable here, so `jl_code_requires_compiler` now forces codegen only for
+`@cfunction`, which cannot work on a device anyway.
 
-This is a bigger deal than the tests: on a device, everything outside the
-sysimage interprets, so any package whose load path reaches `names` (or
-another early-Base function calling a later-Base binding) would hit it.
+Still unexplained at the level that would justify a runtime patch: *why* the
+baked unspecialized entry mis-dispatches. Setting
+`IOS_SYSIMAGE_COMPILE_ALL=1` reproduces it.
+
+### Open: interpreted `ccall` ignored static parameters
+
+Running tier 2 surfaced a second defect, in this port's own code:
+
+    Error: JuliaSyntax parser failed - falling back to flisp!
+      TypeError: in ccall return value, expected Array{T, 1},
+                 got a value of type Vector{UInt8}
+
+`jl_resolve_globals` turns a `ccall`'s declared types into types, but inside a
+`where {T}` method they still carry `T` as a free typevar -- `unsafe_wrap`'s
+`ccall(:jl_ptr_to_array_1d, Array{T,1}, ...)` in base/pointer.jl is the first
+one hit.  Codegen instantiates them in the static-parameter environment
+(src/ccall.cpp); `src/interpreter.c` did not, so the return-value check
+compared against a `TypeVar` and rejected a correct result.  It was not fatal
+-- JuliaSyntax caught it and fell back to flisp -- which is exactly why it
+went unnoticed: parsing silently degrades on device.
+
+src/interpreter.c now performs the same substitution before calling
+`jl_interpret_foreigncall`.  Awaiting confirmation from a simulator run that
+the fallback message is gone.
 
 ## Known limitations
 
