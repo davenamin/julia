@@ -309,6 +309,44 @@ jobs:
           path: ${{ runner.temp }}/host-usr.tar.gz
           retention-days: 3
 
+      # Step 1 of the --compile=all investigation (contrib/ios/CHANGES.md).
+      #
+      # The iOS bake used to pass --compile=all to its --output-o stage, which
+      # bakes unspecialized entries that --compile=min then runs instead of
+      # interpreting; removing it fixed `using Test` there.  Nothing in that
+      # mechanism is iOS-specific, so the question is whether an ordinary host
+      # sysimage built the same way breaks the same way.  If it does, this is a
+      # general Julia bug with a small reproducer and no cross-compilation
+      # involved; if it does not, the fault needs --target emission.
+      #
+      # Runs AFTER the artifact upload on purpose: it replaces usr/'s sysimage,
+      # and the iOS jobs must consume the ordinary one.
+      #
+      # Reports either way and never fails the job -- reproducing is the
+      # informative outcome, not a regression.
+      - name: "Does --compile=all break --compile=min off-iOS?"
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/compileall.log"
+          # Both must go: the flag lives in the sys-o.a rule, so leaving the
+          # archive in place would relink the old image and prove nothing.
+          rm -f usr/lib/julia/sys-o.a usr/lib/julia/sys.dylib usr/lib/julia/sys.so
+          make JULIA_PRECOMPILE=0 HOST_SYSIMAGE_COMPILE_ALL=1 VERBOSE=1 \
+               usr/lib/julia/sys.dylib 2>&1 | tee "$log"
+          # Guard against concluding anything from a build that never saw the
+          # flag -- the whole experiment is worthless if this silently no-ops.
+          grep -q -- '--compile=all' "$log" || {
+            echo "::error::rebuild never passed --compile=all; result would be meaningless"
+            exit 1
+          }
+          ./usr/bin/julia --version
+          if ./usr/bin/julia --compile=min --startup-file=no \
+               -e 'using Test; println("using Test: OK under --compile=min")'; then
+            echo "::notice::--compile=all did NOT reproduce off-iOS -- the fault needs cross-target emission"
+          else
+            echo "::notice::--compile=all REPRODUCES off-iOS -- general Julia bug, no cross-compilation involved"
+          fi
+
   ios-sim:
     name: iOS simulator build + run
     needs: host-build
