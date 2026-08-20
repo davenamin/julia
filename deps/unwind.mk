@@ -120,7 +120,24 @@ $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/libunwind/llvm-libunwind-freebsd-libg
 checksum-llvmunwind: $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER).tar.xz
 	$(JLCHECKSUM) $<
 
-$(BUILDDIR)/llvmunwind-$(LLVMUNWIND_VER)/build-configured: $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/source-extracted $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/libunwind/llvm-libunwind-freebsd-libgcc-api-compat.patch-applied
+# iOS: replace the private _dyld_find_unwind_sections with a public-API
+# reimplementation -- App Store validation rejects app-shipped binaries that
+# reference private dyld symbols (ITMS-90338).  No effect on macOS builds.
+$(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/libunwind/llvm-libunwind-ios-public-dyld-api.patch-applied: $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/libunwind/llvm-libunwind-freebsd-libgcc-api-compat.patch-applied
+	cd $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/libunwind && patch -p2 -f < $(SRCDIR)/patches/llvm-libunwind-ios-public-dyld-api.patch
+	echo 1 > $@
+
+# libunwind configures through llvm-project's own `runtimes` directory, so it
+# reads HandleLLVMOptions.cmake from *this* checkout -- a different tree, and
+# a different LLVM version, from the one deps/llvm.mk patches.  Without the
+# same widening here, an iOS build gets -Wl,-z,defs and ld64 stops with
+# `unknown options: -z`.  Applied from the llvm-project root (-p1), unlike
+# the libunwind patches above, which are applied from libunwind/ (-p2).
+$(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/llvm-ios-no-z-defs.patch-applied: $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/libunwind/llvm-libunwind-ios-public-dyld-api.patch-applied
+	cd $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER) && patch -p1 -f < $(SRCDIR)/patches/llvm-ios-no-z-defs.patch
+	echo 1 > $@
+
+$(BUILDDIR)/llvmunwind-$(LLVMUNWIND_VER)/build-configured: $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/source-extracted $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/llvm-ios-no-z-defs.patch-applied
 	mkdir -p $(dir $@)
 	cd $(dir $@) && \
 	$(CMAKE) $(dir $<) -S $(dir $<)/runtimes $(LLVMUNWIND_OPTS)

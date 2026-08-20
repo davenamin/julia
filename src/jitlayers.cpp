@@ -252,10 +252,42 @@ static void finish_params(Module *M, jl_codegen_params_t &params, SmallVector<or
     }
 }
 
+// iOS devices forbid third-party processes from creating executable memory,
+// so any runtime codegen attempt ends in a jump into a non-executable JIT
+// page (EXC_BAD_ACCESS / KERN_PROTECTION_FAILURE).  Fail as a catchable
+// Julia error that names the offending method instead, so it can be
+// precompiled into the iOS sysimage (IOS_SYSIMAGE_EXTRA_JL /
+// IOS_SYSIMAGE_EXTRA_PROJECT).  The simulator runs under macOS rules where
+// the JIT works, so only device builds are gated.
+//
+// Guarded here rather than in jl_compile_codeinst_now: that is called with
+// the JIT locks held, and from jl_generate_fptr_for_unspecialized_impl,
+// whose failure path installs the interpreter entry point.  Throwing past
+// it would turn code the interpreter can run into an error.
+#if defined(_OS_IOS_) && defined(TARGET_OS_SIMULATOR) && !TARGET_OS_SIMULATOR
+#define JL_IOS_NO_CODEGEN 1
+static void jl_ios_codegen_unavailable(jl_method_instance_t *mi)
+{
+    if (mi != NULL && jl_is_method(mi->def.method)) {
+        jl_method_t *def = mi->def.method;
+        jl_errorf("code generation is not available on iOS devices: "
+                  "tried to compile %s.%s -- precompile it into the iOS "
+                  "sysimage or avoid constructs that require native code "
+                  "(e.g. @cfunction)",
+                  jl_symbol_name(def->module->name), jl_symbol_name(def->name));
+    }
+    jl_error("code generation is not available on iOS devices -- "
+             "precompile the required methods into the iOS sysimage");
+}
+#endif
+
 extern "C" JL_DLLEXPORT_CODEGEN
 void *jl_jit_abi_converter_impl(jl_task_t *ct, void *unspecialized, jl_value_t *declrt, jl_value_t *sigt, size_t nargs, int specsig,
                                 jl_code_instance_t *codeinst, jl_callptr_t invoke, void *target, int target_specsig)
 {
+#ifdef JL_IOS_NO_CODEGEN
+    jl_ios_codegen_unavailable(NULL);
+#endif
     if (codeinst == nullptr && unspecialized != nullptr)
         return unspecialized;
     orc::ThreadSafeModule result_m;
@@ -819,6 +851,9 @@ int jl_compile_codeinst_impl(jl_code_instance_t *ci)
 {
     int newly_compiled = 0;
     if (!jl_is_compiled_codeinst(ci)) {
+#ifdef JL_IOS_NO_CODEGEN
+        jl_ios_codegen_unavailable(jl_get_ci_mi(ci));
+#endif
         ++SpecFPtrCount;
         uint64_t start = jl_typeinf_timing_begin();
         jl_compile_codeinst_now(ci);

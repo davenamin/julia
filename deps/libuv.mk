@@ -70,6 +70,35 @@ compile-libuv: $(LIBUV_BUILDDIR)/build-compiled
 fastcheck-libuv: #none
 check-libuv: $(LIBUV_BUILDDIR)/build-checked
 
+## Host-native libuv for cross-compilation host tools (e.g. flisp) ##
+ifeq ($(USE_CROSS_FLISP), 1)
+HOST_LIBUV_BUILDDIR := $(BUILDDIR)/host-$(LIBUV_SRC_DIR)
+
+$(HOST_LIBUV_BUILDDIR)/build-configured: $(SRCCACHE)/$(LIBUV_SRC_DIR)/source-extracted
+	touch -c $(SRCCACHE)/$(LIBUV_SRC_DIR)/aclocal.m4
+	touch -c $(SRCCACHE)/$(LIBUV_SRC_DIR)/Makefile.in
+	touch -c $(SRCCACHE)/$(LIBUV_SRC_DIR)/configure
+	mkdir -p $(dir $@)
+	cd $(dir $@) && \
+	CC="$(HOSTCC)" CXX="$(HOSTCXX)" \
+	CFLAGS="$(HOST_CFLAGS) -O2" CXXFLAGS="$(HOST_CXXFLAGS)" LDFLAGS="" \
+	$(SRCCACHE)/$(LIBUV_SRC_DIR)/configure --with-pic \
+		--prefix=$(abspath $(build_prefix)/host) \
+		--libdir=$(abspath $(build_prefix)/host/lib) \
+		--build=$(BUILD_MACHINE) --host=$(BUILD_MACHINE)
+	echo 1 > $@
+
+$(HOST_LIBUV_BUILDDIR)/build-compiled: $(HOST_LIBUV_BUILDDIR)/build-configured
+	$(MAKE) -C $(dir $<) $(UV_MFLAGS)
+	echo 1 > $@
+
+install-host-libuv: $(HOST_LIBUV_BUILDDIR)/build-compiled
+	$(MAKE) -C $(HOST_LIBUV_BUILDDIR) install
+
+clean-host-libuv:
+	rm -rf $(HOST_LIBUV_BUILDDIR)
+endif
+
 else # USE_BINARYBUILDER_LIBUV
 
 $(eval $(call bb-install,libuv,LIBUV,false))
