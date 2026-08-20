@@ -268,9 +268,33 @@ compiled entry; nothing loses its only way to run, because a plain `ccall` is
 interpretable here, so `jl_code_requires_compiler` now forces codegen only for
 `@cfunction`, which cannot work on a device anyway.
 
-Still unexplained at the level that would justify a runtime patch: *why* the
-baked unspecialized entry mis-dispatches. Setting
-`IOS_SYSIMAGE_COMPILE_ALL=1` reproduces it.
+**It is not an iOS bug.**  Nothing in the mechanism is target-specific --
+`jl_compile_all_defs` bakes unspecialized entries whenever `--compile=all`
+reaches an `--output-o` stage, and `src/gf.c` prefers them under
+`--compile=min` on any platform -- so the same condition was reproduced on an
+ordinary macOS host build (`HOST_SYSIMAGE_COMPILE_ALL=1` in sysimage.mk, wired
+into the host CI job).  It reproduces, and more violently than on iOS:
+
+    $ julia --compile=min -e 'using Test'
+    [36503] signal 4 (2): Illegal instruction: 4
+      println at ./coreio.jl:10
+      display_error at ./client.jl:111
+      ...
+      true_main at src/jlapi.c:985
+    Trace/BPT trap: 5
+
+SIGILL, not a MethodError, and inside the error-*display* path: something
+raised, and then printing it transferred control somewhere that is not valid
+code.  `julia --version` against the same sysimage is fine, so the image is
+only broken under `--compile=min`, exactly as on iOS.
+
+So this is a general Julia defect on a path that is already known to be
+fragile (JuliaLang/julia#29601, #50885), not something the port introduced,
+and dropping the flag is avoiding a broken code path rather than working
+around a cross-compilation quirk.  It is now debuggable under lldb/rr on any
+machine; `IOS_SYSIMAGE_COMPILE_ALL=1` or `HOST_SYSIMAGE_COMPILE_ALL=1`
+reproduces on demand.  Still unexplained is the step from "unspecialized entry
+is preferred" to "control lands somewhere invalid".
 
 ### Resolved: interpreted `ccall` ignored static parameters
 
