@@ -291,10 +291,45 @@ only broken under `--compile=min`, exactly as on iOS.
 So this is a general Julia defect on a path that is already known to be
 fragile (JuliaLang/julia#29601, #50885), not something the port introduced,
 and dropping the flag is avoiding a broken code path rather than working
-around a cross-compilation quirk.  It is now debuggable under lldb/rr on any
-machine; `IOS_SYSIMAGE_COMPILE_ALL=1` or `HOST_SYSIMAGE_COMPILE_ALL=1`
-reproduces on demand.  Still unexplained is the step from "unspecialized entry
-is preferred" to "control lands somewhere invalid".
+around a cross-compilation quirk.  `IOS_SYSIMAGE_COMPILE_ALL=1` or `HOST_SYSIMAGE_COMPILE_ALL=1` reproduces on
+demand.
+
+#### The mechanism
+
+Run under a debugger, the fault is not a wild jump -- it is a deliberate trap:
+
+    Unreachable reached at 0x7fffdbab822f
+    => 0x7fffdbab822a <julia_println_202911+74>: call ijl_apply_generic@plt
+       0x7fffdbab822f <julia_println_202911+79>: ud2      <-- faults here
+    #0 julia_println_202911 () at coreio.jl:10
+    #2 julia_display_error_166825 () at client.jl:111
+
+`ud2` immediately after a generic call is what codegen emits when a call's
+return type is inferred `Union{}`: the call cannot return, so what follows is
+`unreachable`.  So:
+
+1. `--compile=all` makes `jl_compile_all_defs` compile each method's
+   *unspecialized* MethodInstance.  `jl_get_unspecialized` builds that as
+   `jl_get_specialized(def, def->sig, jl_emptysvec)` -- the declared, often
+   abstract signature, with no static parameters.
+2. Inferring over those abstract signatures concludes far more often that an
+   inner call never returns, so codegen emits `call; unreachable`.  Counting
+   that exact pair in the two images: **40** in a normal sysimage, **1096**
+   with `--compile=all`.
+3. Those entries are baked in, and `src/gf.c` prefers `def->unspecialized`
+   over interpreting whenever `--compile=min` is in force.
+4. At runtime the inner call *does* return, control reaches the `ud2`, and the
+   process dies with SIGILL.
+
+The concrete instance is `println(io::IO) = print(io, "\n")`
+(base/coreio.jl:10), reached from `display_error` (base/client.jl:111) -- so
+the first thing it breaks is the ability to report any other error.
+
+Controls, all with fresh depots and `--compiled-modules=no` so both sides load
+from source: the same `--compile=all` sysimage under the JIT works (fresh
+specializations are inferred in the real world), and a normal sysimage under
+`--compile=min` works.  Only the combination fails.  Reproduced on macOS arm64
+(CI) and Linux x86-64 (locally).
 
 ### Resolved: interpreted `ccall` ignored static parameters
 
