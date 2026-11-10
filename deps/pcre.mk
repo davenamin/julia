@@ -12,6 +12,9 @@ PCRE_JIT = --disable-jit
 else ifeq ($(OS),OpenBSD)
 # jit will need RWX memory
 PCRE_JIT = --disable-jit
+else ifeq ($(IOS),1)
+# iOS enforces W^X; JIT is not usable
+PCRE_JIT = --disable-jit
 else
 PCRE_JIT = --enable-jit
 endif

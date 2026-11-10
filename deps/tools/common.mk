@@ -55,6 +55,13 @@ CMAKE_CXX := "$$(which $(CXX_BASE))"
 CMAKE_CC_ARG := $(CC_ARG)
 CMAKE_CXX_ARG := $(CXX_ARG)
 endif
+# cmake's own iOS support (CMAKE_SYSTEM_NAME and the CMAKE_OSX_* settings
+# below) supplies -isysroot, -arch and the deployment target, so strip those
+# from the compiler arguments and keep only the -D defines.
+ifeq ($(IOS),1)
+CMAKE_CC_ARG := $(filter -D%,$(CMAKE_CC_ARG))
+CMAKE_CXX_ARG := $(filter -D%,$(CMAKE_CXX_ARG))
+endif
 CMAKE_COMMON += -DCMAKE_C_COMPILER=$(CMAKE_CC)
 ifneq ($(strip $(CMAKE_CC_ARG)),)
 CMAKE_COMMON += -DCMAKE_C_COMPILER_ARG1="$(CMAKE_CC_ARG) $(SANITIZE_OPTS)"
@@ -74,6 +81,29 @@ CMAKE_COMMON += -DCMAKE_SYSTEM_NAME=Windows
 endif
 CMAKE_COMMON += -DCMAKE_RC_COMPILER="$$(which $(CROSS_COMPILE)windres)"
 endif
+
+ifeq ($(IOS),1)
+CMAKE_COMMON += -DCMAKE_SYSTEM_NAME=iOS
+CMAKE_COMMON += -DCMAKE_OSX_SYSROOT=$(IOS_SDK)
+CMAKE_COMMON += -DCMAKE_OSX_ARCHITECTURES=arm64
+CMAKE_COMMON += -DCMAKE_OSX_DEPLOYMENT_TARGET=$(IOS_VERSION_MIN)
+# In cross-compilation mode CMake restricts find_*() calls to paths
+# under CMAKE_FIND_ROOT_PATH.  Add the Julia build prefix so that
+# deps installed earlier (e.g. OpenSSL) are visible to later deps
+# (e.g. libssh2, libgit2).
+CMAKE_COMMON += -DCMAKE_FIND_ROOT_PATH=$(build_prefix)
+endif
+
+# Apple's ld64 has no -z option.  HandleLLVMOptions.cmake leaves -Wl,-z,defs
+# off for CMAKE_SYSTEM_NAME "Darwin", but a cmake iOS build reports "iOS".
+# $(call llvm-ios-no-z-defs,<llvm-project root>) adds it to that list.  An
+# in-place edit rather than a patch file because two llvm-project checkouts
+# need it -- LLVM's own (deps/llvm.mk) and the one libunwind configures
+# through (deps/unwind.mk) -- and the line differs between their versions.
+define llvm-ios-no-z-defs
+sed -i.orig -e 's/MATCHES "Darwin|/MATCHES "Darwin|iOS|/' $1/llvm/cmake/modules/HandleLLVMOptions.cmake && \
+	grep -q 'MATCHES "Darwin|iOS|' $1/llvm/cmake/modules/HandleLLVMOptions.cmake
+endef
 
 ifeq ($(CMAKE_GENERATOR),Ninja)
 CMAKE_GENERATOR_COMMAND := -G Ninja

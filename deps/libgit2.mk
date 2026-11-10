@@ -23,6 +23,20 @@ $(BUILDDIR)/$(LIBGIT2_SRC_DIR)/build-configured: | $(build_prefix)/manifest/zlib
 endif
 
 LIBGIT2_OPTS := $(CMAKE_COMMON) -DCMAKE_BUILD_TYPE=Release -DUSE_THREADS=ON -DUSE_BUNDLED_ZLIB=OFF -DUSE_SSH=ON -DREGEX_BACKEND=pcre2 -DBUILD_CLI=OFF -DBUILD_TESTS=OFF
+ifeq ($(IOS),1)
+# Validate certificates against the device's trust store rather than a
+# bundled PEM.  libgit2's autodetection does find Security.framework on iOS,
+# but naming the backend turns a future mis-detection into a configure error
+# instead of a silent fallback to something that needs a CA bundle nothing
+# supplies -- `NetworkOptions.ca_roots()` returns nothing on Apple platforms,
+# on the assumption that the system store is in use.
+LIBGIT2_OPTS += -DUSE_HTTPS=SecureTransport
+# The iPhoneOS SDK ships getentropy() in libSystem but not <sys/random.h>.
+# libgit2's check_function_exists passes on the link test, defines
+# GIT_RAND_GETENTROPY, and src/util/rand.c then fails to include the missing
+# header.  Pre-seed the cache variable so rand.c uses /dev/urandom instead.
+LIBGIT2_OPTS += -DGIT_RAND_GETENTROPY:BOOL=FALSE
+endif
 ifeq ($(OS),WINNT)
 LIBGIT2_OPTS += -DWIN32=ON -DMINGW=ON
 ifeq ($(USE_SYSTEM_LIBSSH2), 0)

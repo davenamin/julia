@@ -9,9 +9,16 @@ WGET=$(which wget 2>/dev/null)
 CURL=$(which curl 2>/dev/null)
 FETCH=$(which fetch 2>/dev/null)
 
-TIMEOUT=15 # seconds
-WGET_OPTS="--no-check-certificate --tries=1 --timeout=$TIMEOUT"
-CURL_OPTS="-fkL --connect-timeout $TIMEOUT -y $TIMEOUT"
+TIMEOUT=30 # seconds
+# Retry transient failures.  Upstream mirrors go slow or unreachable often
+# enough to matter -- gmplib.org in particular -- and a single attempt turns
+# that into `Error 28` from make, which reads like a build failure rather
+# than a network one.  curl's --retry covers timeouts and 5xx but not a 404,
+# so the cache miss below still falls through on the first try instead of
+# being retried three times for nothing.
+RETRIES=3
+WGET_OPTS="--no-check-certificate --tries=$((RETRIES + 1)) --timeout=$TIMEOUT"
+CURL_OPTS="-fkL --connect-timeout $TIMEOUT -y $TIMEOUT --retry $RETRIES --retry-delay 2 --retry-connrefused"
 FETCH_OPTS="-T $TIMEOUT"
 
 if [ $# -eq 1 ]; then
@@ -44,4 +51,16 @@ fi
 # forward to the original URL if it has not cached this download yet, or
 # if the URL is not cacheable.  We fallback to directly querying the
 # uncached URL to protect against cache service downtime
-$GETURL $CACHE_URL || $GETURL $URL
+if $GETURL $CACHE_URL || $GETURL $URL; then
+    exit 0
+fi
+
+# A transfer that dies partway leaves the output behind, and no rule here
+# sets .DELETE_ON_ERROR, so the next `make` would treat the stub as the
+# finished download and fail its checksum rather than fetching again.  That
+# is worse than failing now, and worse still where srccache is cached
+# between builds, because the stub outlives the run that produced it.
+if [ $# -eq 2 ]; then
+    rm -f -- "$1"
+fi
+exit 1

@@ -117,7 +117,21 @@ $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/libunwind/llvm-libunwind-freebsd-libg
 checksum-llvmunwind: $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER).tar.xz
 	$(JLCHECKSUM) $<
 
-$(BUILDDIR)/llvmunwind-$(LLVMUNWIND_VER)/build-configured: $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/source-extracted $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/libunwind/llvm-libunwind-freebsd-libgcc-api-compat.patch-applied
+# Replace the private _dyld_find_unwind_sections with a reimplementation on
+# public API, for iOS targets only: App Store validation rejects binaries that
+# reference private dyld symbols (ITMS-90338).
+$(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/libunwind/llvm-libunwind-ios-public-dyld-api.patch-applied: $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/libunwind/llvm-libunwind-freebsd-libgcc-api-compat.patch-applied
+	cd $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/libunwind && patch -p2 -f < $(SRCDIR)/patches/llvm-libunwind-ios-public-dyld-api.patch
+	echo 1 > $@
+
+# libunwind configures through this checkout's `runtimes` directory and so
+# reads its copy of HandleLLVMOptions.cmake; see llvm-ios-no-z-defs in
+# deps/tools/common.mk.
+$(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/llvm-ios-no-z-defs.patch-applied: $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/libunwind/llvm-libunwind-ios-public-dyld-api.patch-applied
+	$(call llvm-ios-no-z-defs,$(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER))
+	echo 1 > $@
+
+$(BUILDDIR)/llvmunwind-$(LLVMUNWIND_VER)/build-configured: $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/source-extracted $(SRCCACHE)/llvm-project-$(LLVMUNWIND_VER)/llvm-ios-no-z-defs.patch-applied
 	mkdir -p $(dir $@)
 	cd $(dir $@) && \
 	$(CMAKE) $(dir $<) -S $(dir $<)/runtimes $(LLVMUNWIND_OPTS)

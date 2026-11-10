@@ -1,0 +1,4 @@
+# -*- makefile -*-
+
+## source build
+LIBFFI_VER := 3.5.2

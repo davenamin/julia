@@ -5,7 +5,7 @@ ifneq ($(USE_BINARYBUILDER_GMP),1)
 
 GMP_CONFIGURE_OPTS := $(CONFIGURE_COMMON)
 GMP_CONFIGURE_OPTS += --enable-cxx --enable-shared --disable-static
-GMP_CONFIGURE_OPTS += CC_FOR_BUILD="$(HOSTCC)"
+GMP_CONFIGURE_OPTS += CC_FOR_BUILD="$(HOSTCC) $(HOST_CFLAGS)"
 # gmp 6.3.0's configure probes are not C23-clean and reject GCC >= 15 as "not working"
 GMP_CONFIGURE_OPTS += CC="$(CC) $(SANITIZE_OPTS) -std=gnu11"
 
@@ -25,8 +25,16 @@ ifeq ($(OS),emscripten)
 GMP_CONFIGURE_OPTS += CFLAGS="-fPIC"
 endif
 
+# GMP is a GNU package, so ftp.gnu.org carries the identical tarball, and
+# `deps/checksums/gmp` records this file's md5 and sha512 keyed by name
+# alone -- the mirror it came from does not enter into the verification.
+# Try GNU first: cache.julialang.org has no entry for this file (upstream CI
+# takes GMP from BinaryBuilder and only a USE_BINARYBUILDER=0 build, which
+# iOS forces, fetches the source), and gmplib.org is unreachable from some
+# CI networks, which surfaces as a bare `Error 28` from make.
 $(SRCCACHE)/gmp-$(GMP_VER).tar.bz2: | $(SRCCACHE)
-	$(JLDOWNLOAD) $@ https://gmplib.org/download/gmp/$(notdir $@)
+	$(JLDOWNLOAD) $@ https://ftp.gnu.org/gnu/gmp/$(notdir $@) || \
+		$(JLDOWNLOAD) $@ https://gmplib.org/download/gmp/$(notdir $@)
 
 $(SRCCACHE)/gmp-$(GMP_VER)/source-extracted: $(SRCCACHE)/gmp-$(GMP_VER).tar.bz2
 	$(JLCHECKSUM) $<

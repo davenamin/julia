@@ -32,6 +32,32 @@ clean-utf8proc:
 	-rm -f $(BUILDDIR)/$(UTF8PROC_SRC_DIR)/build-compiled
 	-$(MAKE) -C $(BUILDDIR)/$(UTF8PROC_SRC_DIR) clean
 
+## Host-native utf8proc for cross-compilation host tools (e.g. flisp) ##
+ifeq ($(USE_CROSS_FLISP), 1)
+HOST_UTF8PROC_BUILDDIR := $(BUILDDIR)/host-$(UTF8PROC_SRC_DIR)
+
+$(HOST_UTF8PROC_BUILDDIR)/source-copied: $(UTF8PROC_BUILDDIR)/source-extracted
+	mkdir -p $(HOST_UTF8PROC_BUILDDIR)
+	cp $(UTF8PROC_BUILDDIR)/utf8proc.c $(UTF8PROC_BUILDDIR)/utf8proc.h \
+		$(UTF8PROC_BUILDDIR)/utf8proc_data.c $(UTF8PROC_BUILDDIR)/Makefile \
+		$(HOST_UTF8PROC_BUILDDIR)/
+	echo 1 > $@
+
+$(HOST_UTF8PROC_BUILDDIR)/build-compiled: $(HOST_UTF8PROC_BUILDDIR)/source-copied
+	$(MAKE) -C $(HOST_UTF8PROC_BUILDDIR) \
+		CC="$(HOSTCC)" CFLAGS="$(HOST_CFLAGS) -O2" PICFLAG="$(fPIC)" AR="$(AR)" \
+		libutf8proc.a
+	echo 1 > $@
+
+install-host-utf8proc: $(HOST_UTF8PROC_BUILDDIR)/build-compiled
+	mkdir -p $(build_prefix)/host/lib $(build_prefix)/host/include
+	cp $(HOST_UTF8PROC_BUILDDIR)/libutf8proc.a $(build_prefix)/host/lib/
+	cp $(HOST_UTF8PROC_BUILDDIR)/utf8proc.h $(build_prefix)/host/include/
+
+clean-host-utf8proc:
+	rm -rf $(HOST_UTF8PROC_BUILDDIR)
+endif
+
 get-utf8proc: $(UTF8PROC_SRC_FILE)
 extract-utf8proc: $(UTF8PROC_BUILDDIR)/source-extracted
 configure-utf8proc: extract-utf8proc
