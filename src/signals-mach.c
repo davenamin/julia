@@ -21,6 +21,22 @@
 
 #include "julia_assert.h"
 
+#ifdef _OS_IOS_
+// App Store validation rejects a binary that references private symbols, even
+// as weak imports (ITMS-90338), so the keymgr and dyld hooks below are not
+// declared on iOS.  These stand-ins make every use of them a no-op: the lock
+// mode is reported as set, the keymgr lock as not taken, and the dyld hooks
+// as absent, which is the case their callers already handle.
+#define KEYMGR_GCC3_DW2_OBJ_LIST 302
+#define NM_ALLOW_RECURSION 1
+#define _keymgr_set_lockmode_processwide_ptr(key, mode) 0
+#define _keymgr_get_and_lock_processwide_ptr_2(key, result) ((void)(result), -1)
+#define _keymgr_unlock_processwide_ptr(key) ((void)0)
+static void (*const _dyld_atfork_prepare)(void) = NULL;
+static void (*const _dyld_atfork_parent)(void) = NULL;
+static void (*const _dyld_dlopen_atfork_prepare)(void) = NULL;
+static void (*const _dyld_dlopen_atfork_parent)(void) = NULL;
+#else
 // private keymgr stuff
 #define KEYMGR_GCC3_DW2_OBJ_LIST 302
 enum {
@@ -40,6 +56,7 @@ extern void _dyld_atfork_parent(void) __attribute__((weak_import));
 extern void _dyld_dlopen_atfork_prepare(void) __attribute__((weak_import));
 extern void _dyld_dlopen_atfork_parent(void) __attribute__((weak_import));
 //extern void _dyld_dlopen_atfork_child(void) __attribute__((weak_import));
+#endif
 
 static void attach_exception_port(thread_port_t thread, int segv_only);
 

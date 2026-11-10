@@ -13,6 +13,7 @@ typedef struct {
     const char **cmds;
     const char *image_file;
     const char *cpu_target;
+    const char *target;
     int8_t nthreadpools;
     int16_t nthreads;
     int16_t nmarkthreads;

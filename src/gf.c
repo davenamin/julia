@@ -3653,7 +3653,17 @@ jl_code_instance_t *jl_compile_method_internal(jl_method_instance_t *mi, size_t 
         if (jl_is_method(def)) {
             jl_method_instance_t *unspecmi = jl_atomic_load_relaxed(&def->unspecialized);
             if (unspecmi) {
+                // Take an entry that is valid in `world`, not simply the head
+                // of the cache chain.  A sysimage built with `--compile=all`
+                // serializes unspecialized entries inferred during bootstrap,
+                // before the method's callees exist: one can be inferred as
+                // never returning, compiled to `call; unreachable`, and then
+                // expire once the callee is defined.  Running that entry in a
+                // later world reaches the trap when the call does return.
                 jl_code_instance_t *unspec = jl_atomic_load_relaxed(&unspecmi->cache);
+                while (unspec && !(jl_atomic_load_relaxed(&unspec->min_world) <= world &&
+                                   world <= jl_atomic_load_relaxed(&unspec->max_world)))
+                    unspec = jl_atomic_load_relaxed(&unspec->next);
                 if (unspec && jl_atomic_load_acquire(&unspec->invoke) != NULL) {
                     uint8_t specsigflags;
                     jl_callptr_t invoke;

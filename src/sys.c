@@ -23,7 +23,9 @@
 #include <sys/sysctl.h>
 #endif
 #include <sys/wait.h>
+#ifndef _OS_IOS_ // not in the iOS SDK
 #include <sys/ptrace.h>
+#endif
 #include <sys/mman.h>
 #include <dlfcn.h>
 #include <grp.h>

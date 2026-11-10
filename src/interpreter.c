@@ -354,9 +354,85 @@ static jl_value_t *eval_value(jl_value_t *e, interpreter_state *s)
         return eval_methoddef(ex, s);
     }
     else if (head == jl_foreigncall_sym) {
-        jl_error("`ccall` requires the compiler");
+        // Only builds that cannot generate code at runtime perform the call
+        // here; everywhere else this raises before evaluating any argument.
+        if (!jl_foreigncall_interpretable())
+            jl_error("`ccall` requires the compiler");
+        // (callee, rt, at, nreq, (cc, effects, gc_safe), args...), with rt and
+        // at already evaluated to a type and an svec of types and a named
+        // callee normalized to `Expr(:tuple, name[, library])`, both by
+        // jl_resolve_definition_effects in method.c.
+        if (nargs < 5)
+            jl_error("ccall: malformed foreigncall expression");
+        jl_value_t *rt = args[1];
+        jl_value_t *at = args[2];
+        size_t nreq = jl_unbox_long(args[3]);
+        jl_value_t *jlcc = jl_is_quotenode(args[4]) ? jl_quotenode_value(args[4]) : args[4];
+        jl_sym_t *cc = (jl_sym_t*)jlcc;
+        int gc_safe = 0;
+        if (jl_is_tuple(jlcc)) {
+            cc = (jl_sym_t*)jl_get_nth_field_noalloc(jlcc, 0);
+            gc_safe = jl_nfields(jlcc) > 2 && jl_unbox_bool(jl_get_nth_field_noalloc(jlcc, 2));
+        }
+        size_t nccallargs = jl_is_svec(at) ? jl_svec_len(at) : 0;
+        // Roots: the callee and its library, the arguments, and the
+        // static-parameter-substituted rt and at.
+        jl_value_t **argv;
+        JL_GC_PUSHARGS(argv, nccallargs + 4);
+        jl_value_t **callargs = argv + 2;
+        jl_value_t *callee = args[0];
+        if (jl_is_expr(callee) && ((jl_expr_t*)callee)->head == jl_symbol("tuple")) {
+            // A name, looked up in the given library or else in the process.
+            argv[0] = eval_value(jl_exprarg(callee, 0), s);
+            if (jl_expr_nargs(callee) > 1)
+                argv[1] = eval_value(jl_exprarg(callee, 1), s);
+        }
+        else {
+            // Anything else has to evaluate to a pointer.
+            argv[0] = eval_value(callee, s);
+            if (!jl_is_cpointer(argv[0]))
+                jl_error("ccall: first argument not a pointer or valid constant expression");
+        }
+        for (size_t i = 0; i < nccallargs; i++)
+            callargs[i] = eval_value(args[5 + i], s);
+
+        // Substitute this method's static parameters into the declared types,
+        // as codegen does (src/ccall.cpp).  Inside a `where {T}` method they
+        // can carry T as a free typevar -- `unsafe_wrap` declares its return as
+        // `Array{T,1}` -- and the return-value check needs the actual type.
+        if (s->mi != NULL && jl_is_method(s->mi->def.value) &&
+                s->sparam_vals != NULL && jl_svec_len(s->sparam_vals) > 0) {
+            jl_unionall_t *env = (jl_unionall_t*)s->mi->def.method->sig;
+            if (jl_is_unionall((jl_value_t*)env)) {
+                if (jl_has_typevar_from_unionall(rt, env)) {
+                    rt = jl_instantiate_type_in_env(rt, env, jl_svec_data(s->sparam_vals));
+                    callargs[nccallargs] = rt;
+                }
+                jl_svec_t *at2 = NULL;
+                for (size_t i = 0; i < nccallargs; i++) {
+                    jl_value_t *ty = jl_svecref(at, i);
+                    if (!jl_has_typevar_from_unionall(ty, env))
+                        continue;
+                    if (at2 == NULL) {
+                        at2 = jl_svec_copy((jl_svec_t*)at);
+                        callargs[nccallargs + 1] = (jl_value_t*)at2;
+                    }
+                    jl_svecset(at2, i,
+                               jl_instantiate_type_in_env(ty, env, jl_svec_data(s->sparam_vals)));
+                }
+                if (at2 != NULL)
+                    at = (jl_value_t*)at2;
+            }
+        }
+
+        jl_value_t *v = jl_interpret_foreigncall(argv[0], argv[1], rt, (jl_svec_t*)at,
+                                                 nreq, cc, gc_safe, callargs, nccallargs);
+        JL_GC_POP();
+        return v;
     }
     else if (head == jl_cfunction_sym) {
+        // Unlike `ccall`, this direction needs a code address that C can call,
+        // which cannot be produced without generating code.
         jl_error("`cfunction` requires the compiler");
     }
     jl_errorf("unsupported or misplaced expression %s", jl_symbol_name(head));
