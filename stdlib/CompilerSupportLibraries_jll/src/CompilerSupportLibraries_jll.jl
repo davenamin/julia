@@ -69,6 +69,11 @@ else
 end
 
 function __init__()
+    @static if Base.IOS
+        # iOS has no GCC support libraries; its runtime is compiler-rt and libc++.
+        global artifact_dir = dirname(Sys.BINDIR)
+        return
+    end
     global libgcc_s_handle = dlopen(libgcc_s)
     global libgcc_s_path = dlpath(libgcc_s_handle)
     # `libatomic` may not be present in stripped-down installations; tolerate failure.
@@ -99,7 +104,7 @@ end
 # JLLWrappers API compatibility shims.  Note that not all of these will really make sense.
 # For instance, `find_artifact_dir()` won't actually be the artifact directory, because
 # there isn't one.  It instead returns the overall Julia prefix.
-is_available() = true
+is_available() = !Base.IOS
 find_artifact_dir() = artifact_dir
 dev_jll() = error("stdlib JLLs cannot be dev'ed")
 best_wrapper = nothing

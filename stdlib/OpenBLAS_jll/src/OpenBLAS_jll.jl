@@ -64,7 +64,8 @@ function __init__()
 
     # As mentioned above, we are sneaking this in here so that we don't have to
     # depend on CSL_jll and load _all_ of its libraries.
-    dlopen(_libgfortran)
+    # iOS has no libgfortran, and OpenBLAS is built NOFORTRAN there.
+    Base.IOS || dlopen(_libgfortran)
 
     global libopenblas_handle = dlopen(libopenblas)
     global libopenblas_path = dlpath(libopenblas_handle)
