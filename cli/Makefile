@@ -65,7 +65,12 @@ endif
 
 default: release
 all: release debug
+ifeq ($(IOS), 1)
+# On iOS, we only build the shared library, not the executable
+release debug :  % : libjulia-%
+else
 release debug :  % : julia-% libjulia-%
+endif
 
 $(BUILDDIR)/loader_lib.o : $(SRCDIR)/loader_lib.c $(HEADERS) $(JULIAHOME)/VERSION
 	@$(call PRINT_CC, $(CC) -DJL_LIBRARY_EXPORTS $(SHIPFLAGS) $(LOADER_CFLAGS) -c $< -o $@)

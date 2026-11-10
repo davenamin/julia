@@ -268,10 +268,46 @@ JULIA_COMMIT := $(JULIA_VERSION)
 endif
 
 # Whether to use GPL libraries or not.
+#
+# iOS defaults to 0.  The parts of SuiteSparse that Julia uses for sparse
+# factorizations — CHOLMOD, UMFPACK, SPQR — are GPL, and the App Store's
+# distribution terms cannot be met while shipping GPL code.  With this off,
+# deps/Makefile never builds libsuitesparse, Makefile drops its libraries
+# from JL_PRIVATE_LIBS (so no SuiteSparse frameworks are emitted),
+# base/Makefile bakes `Base.USE_GPL_LIBS = false`, and both
+# SuiteSparse_jll.__init__ and SparseArrays' `include`s of
+# solvers/{umfpack,cholmod,spqr}.jl are guarded on that constant.
+#
+# What this costs on device: sparse `lu`, `cholesky`, `qr` and `\`.  Dense
+# linear algebra is unaffected — that is BLAS/LAPACK, not SuiteSparse.  Note
+# it does NOT remove GMP or MPFR (BigInt/BigFloat), which are LGPL and stay;
+# shipping those relies on this build's one-dylib-per-framework layout, which
+# keeps them dynamically linked and replaceable.
+#
+# Override on the command line (`make IOS=1 USE_GPL_LIBS=1 ...`) for a
+# non-App-Store build that wants the sparse solvers back.
+ifeq ($(IOS), 1)
+USE_GPL_LIBS ?= 0
+else
 USE_GPL_LIBS ?= 1
+endif
 
 # Whether to install Julia as a framework on Darwin (Apple) platforms.
 DARWIN_FRAMEWORK ?= 0
+
+# Set IOS=1 to cross-compile Julia as a set of shared libraries for iOS
+# (arm64).  Requires Xcode with the iOS SDK, an out-of-tree build directory,
+# and an ordinary host build in the source tree; see contrib/ios/build-xcframework.sh.
+IOS ?= 0
+
+# Whether an IOS=1 build also bakes the sysimage (sysimage-ios.mk).  Set to 0
+# for a libraries-only build, which is much faster.
+IOS_SYSIMAGE ?= 1
+
+# The julia that bakes the iOS sysimage: nothing built with IOS=1 can run on
+# the build machine, so this is the host build in the source tree.  Both iOS
+# slices (device and simulator) share it.
+HOST_JULIA := $(JULIAHOME)/usr/bin/julia
 
 # Override in Make.user to customize the framework:
 FRAMEWORK_NAME ?= Julia
@@ -501,6 +537,50 @@ fPIC := -fPIC
 EXE :=
 endif
 
+# iOS cross-compilation configuration
+ifeq ($(IOS), 1)
+override OS := Darwin
+override ARCH := aarch64
+APPLE_ARCH := arm64
+# 16.4 is the floor for Accelerate's ILP64 BLAS/LAPACK interface (the
+# `$NEWLAPACK$ILP64` symbol suffix), which LinearAlgebra forwards into
+# libblastrampoline on device — see BLAS.forward_accelerate!.  Below it those
+# symbols do not exist, and only the LP64 ones do, which an ILP64 Julia
+# cannot call.  (LAPACK itself is still present without Accelerate: FC :=
+# false makes OpenBLAS build NOFORTRAN, which selects its C_LAPACK sources
+# rather than dropping LAPACK.)
+IOS_VERSION_MIN ?= 16.4
+# IOS_PLATFORM selects the target: iphoneos (device) or iphonesimulator
+IOS_PLATFORM ?= iphoneos
+IOS_SDK := $(shell xcrun --sdk $(IOS_PLATFORM) --show-sdk-path 2>/dev/null)
+ifeq ($(IOS_SDK),)
+$(error iOS SDK not found for platform '$(IOS_PLATFORM)'. Ensure Xcode and iOS SDK are installed.)
+endif
+# Use clang from Xcode for the selected platform
+CC := $(shell xcrun --sdk $(IOS_PLATFORM) -f clang)
+CXX := $(shell xcrun --sdk $(IOS_PLATFORM) -f clang++)
+# iOS target flags — use the correct version-min flag for device vs simulator
+ifeq ($(IOS_PLATFORM),iphonesimulator)
+IOS_VERSION_MIN_FLAG := -mios-simulator-version-min=$(IOS_VERSION_MIN)
+else
+IOS_VERSION_MIN_FLAG := -mios-version-min=$(IOS_VERSION_MIN)
+endif
+IOS_TARGET_FLAGS := -arch arm64 -isysroot $(IOS_SDK) $(IOS_VERSION_MIN_FLAG) -DTARGET_OS_IPHONE=1
+CC += $(IOS_TARGET_FLAGS)
+CXX += $(IOS_TARGET_FLAGS)
+FC := false
+# iOS doesn't support executables from user builds
+EXE :=
+# Host tools (like LLVM tblgen) must be built with the macOS SDK, not the iOS
+# SDK.  Use := (immediate) to override the delayed-expansion HOSTCC set earlier.
+MACOS_SDK := $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)
+HOSTCC := $(shell xcrun --sdk macosx -f clang)
+HOSTCXX := $(shell xcrun --sdk macosx -f clang++)
+HOST_CFLAGS := -isysroot $(MACOS_SDK)
+HOST_CXXFLAGS := -isysroot $(MACOS_SDK)
+USE_CROSS_FLISP := 1
+endif
+
 # Set to 1 to enable profiling with perf
 ifeq ("$(OS)", "Linux")
 USE_PERF_JITEVENTS ?= 1
@@ -548,15 +628,19 @@ USECLANG := 0
 USEGCC := 1
 endif
 
+ifneq ($(IOS), 1)
 FC := $(CROSS_COMPILE)gfortran
+endif
 
 # Note: Supporting only macOS Mojave and above
 ifeq ($(OS), Darwin)
+ifneq ($(IOS), 1)
 APPLE_ARCH := $(shell uname -m)
 ifneq ($(APPLE_ARCH),arm64)
 MACOSX_VERSION_MIN := 10.14
 else
 MACOSX_VERSION_MIN := 11.0
+endif
 endif
 endif
 
@@ -625,12 +709,27 @@ SHIPFLAGS   = $(SHIPFLAGS_CLANG) $(BOLT_CFLAGS_CLANG)
 BOLT_CFLAGS  := $(BOLT_CFLAGS_CLANG)
 
 ifeq ($(OS), Darwin)
+ifneq ($(IOS), 1)
 CC += -mmacosx-version-min=$(MACOSX_VERSION_MIN)
 CXX += -mmacosx-version-min=$(MACOSX_VERSION_MIN)
 FC += -mmacosx-version-min=$(MACOSX_VERSION_MIN)
 # export MACOSX_DEPLOYMENT_TARGET so that ld picks it up, especially for deps
 export MACOSX_DEPLOYMENT_TARGET=$(MACOSX_VERSION_MIN)
+else
+# Ensure MACOSX_DEPLOYMENT_TARGET does not leak from the user's environment
+# into dependency builds (e.g. CMake), which would cause conflicting
+# -mmacosx-version-min and -mios-version-min flags.
+unexport MACOSX_DEPLOYMENT_TARGET
+override MACOSX_DEPLOYMENT_TARGET=
 endif
+endif
+endif
+
+# Re-apply iOS compiler and target flags after compiler detection,
+# since the USECLANG/USEGCC blocks above override CC/CXX.
+ifeq ($(IOS), 1)
+CC := $(shell xcrun --sdk $(IOS_PLATFORM) -f clang) $(IOS_TARGET_FLAGS)
+CXX := $(shell xcrun --sdk $(IOS_PLATFORM) -f clang++) $(IOS_TARGET_FLAGS)
 endif
 
 # Conditional setting of RELRO flag for enhanced security on Linux builds.
@@ -1086,6 +1185,51 @@ else
 ISX86:=0
 endif
 
+# iOS is always cross-compiled, so there is no host CPU to infer a target
+# from and one has to be named.
+#
+# This is not a tuning knob.  Naming a core lets the compiler emit
+# instructions that core has and older ones lack, and they fault as undefined
+# on those devices rather than degrading — `apple-a13` and up carry the SHA3
+# extension, from which LLVM builds `EOR3` and `XAR` for exactly the
+# xor-and-rotate shape of Random's SIMD generator, so a sysimage built for
+# `apple-m1` crashes in `rand` on anything older than an iPhone 11.  See
+# src/processor_arm.cpp for which chip has what.
+#
+# `apple-a11` — iPhone 8, iPhone X — is the default because it is where the
+# cliff is.  Measured against `apple-a13` over float/int conversion,
+# reductions, dot products, a gemm inner loop, byte search and complex
+# multiply, a7 and a13 emit byte-identical code; what a7 loses is elsewhere:
+#
+#   atomics   2-3x more instructions (LL/SC `ldaxr`/`stlxr` retry loops
+#             instead of the single-instruction `casal`/`ldaddal`/`swpal`),
+#             which taxes the whole runtime -- GC, locks, task switching
+#   Float16   3x (196 vs 65 instructions for a dot product)
+#
+# Both of those are ARMv8.1/8.2 and arrive at A11, and a12 and a13 add
+# nothing further to them.  All a13 buys over a11 is SHA3, worth ~9% on
+# Random's SIMD generator and nothing anywhere else.
+#
+# **An app built this way must not install on anything older**, or it faults
+# on an undefined instruction.  `IOS_VERSION_MIN = 16.4` does not achieve
+# that by itself: it admits A9 iPads, and even iOS 17/18 admit A10 ones.
+# Either declare the app iPhone-only (iOS 16+ means A11+), or add
+# `iphone-ipad-minimum-performance-a12` to UIRequiredDeviceCapabilities,
+# which covers both families.  `apple-a7` is the arm64 iOS baseline and the
+# only value that needs no gating at all:
+#
+#     make IOS=1 IOS_CPU_TARGET=apple-a7 ...
+#
+# Multiversioning (`IOS_CPU_TARGET='apple-a7;apple-m1,clone_all'`) is the way
+# to keep both, but note that `_get_host_cpu` has to identify the device
+# correctly for the dispatch to pick the right clone.
+ifeq ($(IOS), 1)
+IOS_CPU_TARGET ?= apple-a11
+ifeq ($(MARCH)$(MCPU)$(MTUNE)$(JULIA_CPU_TARGET),)
+MCPU = $(firstword $(subst ;, ,$(IOS_CPU_TARGET)))
+JULIA_CPU_TARGET ?= $(IOS_CPU_TARGET)
+endif
+endif
 
 #If nothing is set default to native unless we are cross-compiling
 ifeq ($(MARCH)$(MCPU)$(MTUNE)$(JULIA_CPU_TARGET)$(XC_HOST),)
@@ -1308,6 +1452,16 @@ LLVM_CONFIG_HOST = $(LLVM_CONFIG_PATH_FIX) $(call spawn,$(LLVM_CONFIG))
 endif
 endif
 
+# iOS cross-build override: the BUILD_OS == OS branch above resolves
+# LLVM_CONFIG_HOST to the cross-built (iOS arm64) llvm-config, which can't
+# run on the macOS host.  Use the in-tree host build's llvm-config
+# (at $(JULIAHOME)/usr/tools/llvm-config) instead, when present.
+ifeq ($(IOS), 1)
+ifneq ($(wildcard $(JULIAHOME)/usr/tools/llvm-config),)
+LLVM_CONFIG_HOST := $(JULIAHOME)/usr/tools/llvm-config
+endif
+endif
+
 ifeq ($(USE_SYSTEM_PCRE), 1)
 PCRE_CONFIG := pcre2-config
 else
@@ -1401,6 +1555,27 @@ else
   UTF8PROC_INC := $(build_includedir)
 endif
 
+# When building host tools during cross-compilation (e.g. flisp for iOS),
+# override the compiler and flags to target the build machine instead of the
+# cross-compilation target.  This block must appear after all architecture-
+# and OS-specific flag additions so that it can cleanly replace them.
+ifeq ($(BUILDING_HOST_TOOLS), 1)
+ifeq ($(IOS), 1)
+CC := $(HOSTCC)
+CXX := $(HOSTCXX)
+# Provide the sysroot so that the host compiler (invoked by absolute path
+# via xcrun -f) can locate system headers (stdlib.h, etc.).
+CFLAGS := $(HOST_CFLAGS)
+CXXFLAGS := $(HOST_CXXFLAGS)
+# Reset flags that may contain target-specific options (e.g. -mcrc for
+# aarch64) which are invalid for the host compiler when host != target.
+JCFLAGS := $(JCFLAGS_CLANG)
+JCPPFLAGS := $(JCPPFLAGS_CLANG)
+JCXXFLAGS := $(JCXXFLAGS_CLANG)
+LDFLAGS :=
+endif
+endif
+
 # We need python for things like BB triplet recognition.  We don't really care
 # about version, generally, so just find something that works:
 PYTHON := $(shell which python 2>/dev/null || which python3 2>/dev/null || which python2 2>/dev/null || echo not found)
@@ -1419,6 +1594,10 @@ endif
 
 # BinaryBuilder options.  We default to "on" for all the projects listed in BB_PROJECTS,
 # but only if contrib/normalize_triplet.py works for our requested triplet.
+ifeq ($(IOS), 1)
+# No BinaryBuilder pre-built artifacts are available for iOS; build all deps from source.
+USE_BINARYBUILDER := 0
+else
 ifeq ($(shell $(call invoke_python,$(JULIAHOME)/contrib/normalize_triplet.py) $(or $(XC_HOST),$(XC_HOST),$(BUILD_MACHINE)) >/dev/null 2>/dev/null; echo $$?),0)
 USE_BINARYBUILDER ?= 1
 else
@@ -1426,6 +1605,7 @@ ifneq ($(shell $(call invoke_python,$(JULIAHOME)/contrib/normalize_triplet.py) x
 $(warning normalize_triplet.py appears to be non-functional (used python interpreter "$(PYTHON)"), so BinaryBuilder disabled)
 endif
 USE_BINARYBUILDER ?= 0
+endif
 endif
 
 # Auto-detect triplet once, create different versions that we use as defaults below for each BB install target
@@ -1519,8 +1699,9 @@ endif
 
 # Warn if the user tries to build something that requires `gfortran` but they don't have it installed.
 # Goals that only download or repackage sources never run the fortran compiler and are exempt.
+# So are iOS builds, which have no fortran compiler and build OpenBLAS without one.
 FC_EXEMPT_GOALS := get getall light-source-dist full-source-dist print-%
-ifneq (,$(filter-out $(FC_EXEMPT_GOALS),$(or $(MAKECMDGOALS),x)))
+ifneq (,$(if $(filter 1,$(IOS)),,$(filter-out $(FC_EXEMPT_GOALS),$(or $(MAKECMDGOALS),x))))
 ifeq ($(FC_VERSION),)
 ifneq ($(USE_BINARYBUILDER_OPENBLAS)$(USE_BINARYBUILDER_LIBSUITESPARSE),11)
 $(error "Attempting to build OpenBLAS or SuiteSparse without a functioning fortran compiler!")
@@ -1649,6 +1830,11 @@ WHOLE_ARCHIVE := -Xlinker -all_load
 NO_WHOLE_ARCHIVE :=
 HAVE_SSP := 1
 JLIBLDFLAGS += -Wl,-compatibility_version,$(SOMAJOR) -Wl,-current_version,$(JULIA_MAJOR_VERSION).$(JULIA_MINOR_VERSION).$(JULIA_PATCH_VERSION)
+ifeq ($(IOS), 1)
+ifneq ($(BUILDING_HOST_TOOLS), 1)
+OSLIBS += -framework UIKit -framework Security
+endif
+endif
 endif
 
 ifeq ($(OS), WINNT)
@@ -1911,8 +2097,12 @@ LIBGCC_NAME := libgcc_s_seh-1.$(SHLIB_EXT)
 endif
 endif
 # On macOS, libgcc_s has soversion 1.1 always on aarch64 and only for GCC 12+
-# (-> libgfortran 5) on x86_64
+# (-> libgfortran 5) on x86_64.
+# On iOS, libgcc_s does not exist — Apple's clang runtime (compiler-rt)
+# provides the equivalent functionality.  Leave LIBGCC_NAME empty so that
+# the loader does not try to dlopen it.
 ifeq ($(OS),Darwin)
+ifneq ($(IOS),1)
 ifeq ($(ARCH),aarch64)
 LIBGCC_NAME := libgcc_s.1.1.$(SHLIB_EXT)
 else
@@ -1923,17 +2113,20 @@ LIBGCC_NAME := libgcc_s.1.$(SHLIB_EXT)
 endif
 endif
 endif
+endif
 ifneq ($(findstring $(OS),Linux FreeBSD),)
 LIBGCC_NAME := libgcc_s.$(SHLIB_EXT).1
 endif
 
 # USE_SYSTEM_CSL causes it to get symlinked into build_private_shlibdir
+ifneq ($(LIBGCC_NAME),)
 ifeq ($(USE_SYSTEM_CSL),1)
 LIBGCC_BUILD_DEPLIB := $(call dep_lib_path,$(build_shlibdir),$(build_private_shlibdir)/$(LIBGCC_NAME))
 else
 LIBGCC_BUILD_DEPLIB := $(call dep_lib_path,$(build_shlibdir),$(build_shlibdir)/$(LIBGCC_NAME))
 endif
 LIBGCC_INSTALL_DEPLIB := $(call dep_lib_path,$(shlibdir),$(private_shlibdir)/$(LIBGCC_NAME))
+endif
 
 # We only bother to define this on Linux, as that's the only platform that does libstdc++ probing
 # On all other platforms, the LIBSTDCXX_*_DEPLIB variables will be empty.
@@ -2010,6 +2203,22 @@ LOADER_DEBUG_INSTALL_DEP_LIBS = $(call build_deplibs, \
     @$(LIBJULIAINTERNAL_DEBUG_INSTALL_DEPLIB) \
     @$(LIBJULIACODEGEN_DEBUG_INSTALL_DEPLIB) \
 )
+
+ifeq ($(IOS),1)
+# iOS App Store layout: apps may not contain loose dylibs, so every dependency
+# library ships as its own single-binary framework next to the Julia framework
+# in the app's Frameworks/ directory (see contrib/ios/Makefile).  The loader
+# resolves each DEP_LIBS entry relative to its own directory (the Julia
+# framework), so ../<base>.framework/<base> lands on the sibling framework.
+# Entry order and the three trailing "special" (@-prefixed) entries mirror the
+# generic definitions above: libgcc_s does not exist on iOS (LIBGCC_NAME is
+# empty), the libstdc++ probing slot is Linux-only (empty "@"), and
+# libjulia-internal / libjulia-codegen load last.
+LOADER_BUILD_DEP_LIBS = ../libopenlibm.framework/libopenlibm:@:@../libjulia-internal.framework/libjulia-internal:@../libjulia-codegen.framework/libjulia-codegen:
+LOADER_DEBUG_BUILD_DEP_LIBS = ../libopenlibm.framework/libopenlibm:@:@../libjulia-internal-debug.framework/libjulia-internal-debug:@../libjulia-codegen-debug.framework/libjulia-codegen-debug:
+LOADER_INSTALL_DEP_LIBS = $(LOADER_BUILD_DEP_LIBS)
+LOADER_DEBUG_INSTALL_DEP_LIBS = $(LOADER_DEBUG_BUILD_DEP_LIBS)
+endif
 
 # Colors for make
 ifndef VERBOSE
