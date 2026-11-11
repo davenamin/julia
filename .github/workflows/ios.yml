@@ -416,13 +416,27 @@ jobs:
                  "build-ios-sim/usr/share/julia/stdlib/$v"
 
       - name: Build the simulator slice
+        id: build
         env:
           SLICES: iphonesimulator
           # Stage test/ into the resources tree so the two test-suite steps
           # below have something to run.  Off by default: a shipping app has
           # no reason to carry the suite.
           IOS_STAGE_TESTS: 1
-        run: contrib/ios/build-xcframework.sh "$PWD/ios-out"
+        # Under -j the failing command is thousands of lines above the end of
+        # the log, so on failure repeat the first errors where they can be read.
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/ios-build.log"
+          if ! contrib/ios/build-xcframework.sh "$PWD/ios-out" 2>&1 | tee "$log"; then
+            echo "::group::first failing make targets, with the output before each"
+            grep -n -m 3 -B 30 -E 'make(\[[0-9]+\])?: \*\*\* ' "$log" || true
+            echo "::endgroup::"
+            echo "::group::compiler and configure errors"
+            grep -n -E '(^|[^-])error: |fatal error|configure: error|CMake Error' "$log" | head -40 || true
+            echo "::endgroup::"
+            exit 1
+          fi
 
       - name: Sysimage size
         run: |
@@ -530,7 +544,7 @@ jobs:
       # something tier 2 would not hit at all — so getting both signals from
       # one run is worth more than stopping at the first.
       - name: "Tier 2: Julia's test suite under the interpreter"
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           TIER2_TESTS: "goto some ordering osutils version meta"
         run: |
@@ -624,7 +638,20 @@ jobs:
       - name: Build the device slice
         env:
           SLICES: iphoneos
-        run: contrib/ios/build-xcframework.sh "$PWD/ios-out"
+        # Under -j the failing command is thousands of lines above the end of
+        # the log, so on failure repeat the first errors where they can be read.
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/ios-build.log"
+          if ! contrib/ios/build-xcframework.sh "$PWD/ios-out" 2>&1 | tee "$log"; then
+            echo "::group::first failing make targets, with the output before each"
+            grep -n -m 3 -B 30 -E 'make(\[[0-9]+\])?: \*\*\* ' "$log" || true
+            echo "::endgroup::"
+            echo "::group::compiler and configure errors"
+            grep -n -E '(^|[^-])error: |fatal error|configure: error|CMake Error' "$log" | head -40 || true
+            echo "::endgroup::"
+            exit 1
+          fi
 
       # A wrong-architecture object is the failure mode --target exists to
       # prevent, and it stays silent until the app refuses to launch.
