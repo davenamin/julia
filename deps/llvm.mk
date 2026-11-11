@@ -144,6 +144,9 @@ endif
 # sancov has no use on a device, and its source does not compile against the
 # libc++ in current iPhoneOS SDKs.
 LLVM_CMAKE += -DLLVM_TOOL_SANCOV_BUILD=OFF
+# LLVM's lit test targets depend on every tool, sancov included, and cannot
+# run in a cross-build anyway.
+LLVM_CMAKE += -DLLVM_INCLUDE_TESTS=OFF
 endif # IOS
 ifeq ($(USE_LLVM_SHLIB),1)
 # NOTE: we could also --disable-static here (on the condition we link tools
