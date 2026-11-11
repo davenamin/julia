@@ -31,7 +31,7 @@ $(SRCCACHE)/libffi-$(LIBFFI_VER).tar.gz: | $(SRCCACHE)
 
 $(SRCCACHE)/libffi-$(LIBFFI_VER)/source-extracted: $(SRCCACHE)/libffi-$(LIBFFI_VER).tar.gz
 	$(JLCHECKSUM) $<
-	cd $(dir $<) && $(TAR) zxf $<
+	cd $(dir $<) && $(TAR) -zxf $<
 	touch -c $(SRCCACHE)/libffi-$(LIBFFI_VER)/configure # old target
 	echo 1 > $@
 
