@@ -470,8 +470,8 @@ CMAKE_GENERATOR ?= make
 # the user may have unwittingly set.  To pass PKG_CONFIG_* variables
 # through to the buildsystem, these must be set either on the command
 # line, or through `override` directives within Make.user
-export PKG_CONFIG_PATH = $(JULIAHOME)/usr/lib/pkgconfig
-export PKG_CONFIG_LIBDIR = $(JULIAHOME)/usr/lib/pkgconfig
+export PKG_CONFIG_PATH = $(build_libdir)/pkgconfig
+export PKG_CONFIG_LIBDIR = $(build_libdir)/pkgconfig
 
 # Figure out OS and architecture
 RAW_BUILD_OS = $(shell uname)

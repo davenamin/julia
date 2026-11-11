@@ -6,6 +6,11 @@ $(eval $(call git-external,zstd,ZSTD,,,$(BUILDDIR)))
 $(BUILDDIR)/$(ZSTD_SRC_DIR)/source-extracted: export MSYS=$(MSYS_NONEXISTENT_SYMLINK_TARGET_FIX)
 
 ZSTD_BUILD_OPTS := MOREFLAGS="-DZSTD_MULTITHREAD $(fPIC)" bindir=$(build_private_libexecdir)
+ifeq ($(IOS), 1)
+# Zstd's makefile takes its compiler from $(CC), which nothing else hands it;
+# left alone it builds with the host's cc, for macOS.
+ZSTD_BUILD_OPTS += CC="$(CC)"
+endif
 ifeq ($(OS), WINNT)
 # Zstd detects "Windows" not WINNT, ordinarily from the inherited $(OS), but it expects the
 # override to be done using TARGET_SYSTEM.
