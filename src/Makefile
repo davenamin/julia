@@ -211,8 +211,9 @@ LLVM_CXXFLAGS := -I$(build_includedir) -std=c++17 -fno-exceptions -fno-rtti \
 # `llvm-config --libs --link-static` emits: TargetParser needs Support, which
 # needs Demangle.
 RT_LLVMLINK := $(LLVM_LDFLAGS) -lLLVMTargetParser -lLLVMSupport -lLLVMDemangle -lz
-# Shared LLVM library for libjulia-codegen
-CG_LLVMLINK := $(LLVM_LDFLAGS) -lLLVM
+# Shared LLVM library for libjulia-codegen, plus the zlib and zstd that
+# aotcompile.cpp calls directly, as the non-iOS path above adds.
+CG_LLVMLINK := $(LLVM_LDFLAGS) -lLLVM -lz -lzstd
 # libffi, for interpreter-ccall.c.  Static and folded into libjulia-internal:
 # an App Store bundle may not contain loose dylibs, so a shared library would
 # cost another framework for a single consumer.
