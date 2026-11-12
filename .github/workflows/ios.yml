@@ -430,10 +430,10 @@ jobs:
           log="$RUNNER_TEMP/ios-build.log"
           if ! contrib/ios/build-xcframework.sh "$PWD/ios-out" 2>&1 | tee "$log"; then
             echo "::group::first failing make targets, with the output before each"
-            grep -n -m 3 -B 30 -E 'make(\[[0-9]+\])?: \*\*\* ' "$log" || true
+            grep -v 'Waiting for unfinished jobs' "$log" | grep -n -m 3 -B 30 -E 'make(\[[0-9]+\])?: \*\*\* ' || true
             echo "::endgroup::"
             echo "::group::compiler and configure errors"
-            grep -n -E '(^|[^-])error: |fatal error|configure: error|CMake Error' "$log" | head -40 || true
+            grep -E -A 3 '(^|[^-])error: |fatal error|configure: error|CMake Error|^ld: |Undefined symbols' "$log" | awk '!seen[$0]++' | head -80 || true
             echo "::endgroup::"
             exit 1
           fi
@@ -645,10 +645,10 @@ jobs:
           log="$RUNNER_TEMP/ios-build.log"
           if ! contrib/ios/build-xcframework.sh "$PWD/ios-out" 2>&1 | tee "$log"; then
             echo "::group::first failing make targets, with the output before each"
-            grep -n -m 3 -B 30 -E 'make(\[[0-9]+\])?: \*\*\* ' "$log" || true
+            grep -v 'Waiting for unfinished jobs' "$log" | grep -n -m 3 -B 30 -E 'make(\[[0-9]+\])?: \*\*\* ' || true
             echo "::endgroup::"
             echo "::group::compiler and configure errors"
-            grep -n -E '(^|[^-])error: |fatal error|configure: error|CMake Error' "$log" | head -40 || true
+            grep -E -A 3 '(^|[^-])error: |fatal error|configure: error|CMake Error|^ld: |Undefined symbols' "$log" | awk '!seen[$0]++' | head -80 || true
             echo "::endgroup::"
             exit 1
           fi
