@@ -1569,9 +1569,11 @@ CFLAGS := $(HOST_CFLAGS)
 CXXFLAGS := $(HOST_CXXFLAGS)
 # Reset flags that may contain target-specific options (e.g. -mcrc for
 # aarch64) which are invalid for the host compiler when host != target.
-JCFLAGS := $(JCFLAGS_CLANG)
-JCPPFLAGS := $(JCPPFLAGS_CLANG)
-JCXXFLAGS := $(JCXXFLAGS_CLANG)
+# Deferred, because src/support and src/flisp add $(CFLAGS) -- the host
+# sysroot -- to the *_COMMON variables after including this file.
+JCFLAGS = $(JCFLAGS_CLANG)
+JCPPFLAGS = $(JCPPFLAGS_CLANG)
+JCXXFLAGS = $(JCXXFLAGS_CLANG)
 LDFLAGS :=
 endif
 endif
