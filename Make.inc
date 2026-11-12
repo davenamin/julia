@@ -1574,7 +1574,8 @@ CXXFLAGS := $(HOST_CXXFLAGS)
 JCFLAGS = $(JCFLAGS_CLANG)
 JCPPFLAGS = $(JCPPFLAGS_CLANG)
 JCXXFLAGS = $(JCXXFLAGS_CLANG)
-LDFLAGS :=
+# The link needs the sysroot as well, or ld cannot find the system libraries.
+LDFLAGS := $(HOST_CFLAGS)
 endif
 endif
 
