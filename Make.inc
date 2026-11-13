@@ -1976,7 +1976,11 @@ endif
 #   make clang-sa-*
 CLANGSA_FLAGS :=
 CLANGSA_CXXFLAGS :=
-ifeq ($(OS), Darwin) # on new XCode, the files are hidden
+ifeq ($(IOS), 1)
+# Analyze what the iOS build compiles: the target flags live on $(CC) there,
+# which the analyzer rules do not use.
+ CLANGSA_FLAGS += $(IOS_TARGET_FLAGS)
+else ifeq ($(OS), Darwin) # on new XCode, the files are hidden
  CLANGSA_FLAGS += -isysroot $(shell xcrun --show-sdk-path --sdk macosx)
 endif
 ifeq ($(USEGCC),1)

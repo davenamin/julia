@@ -299,6 +299,14 @@ jobs:
       # under build-ios-*/stdlib, leaving every one of those links dangling.
       # The bake reads them regardless of JULIA_LOAD_PATH -- base/sysimg.jl
       # forces @stdlib -- so the sources have to travel with the prefix.
+      # The iOS jobs analyze their own configuration but cannot run a clang
+      # they cross-built, so they borrow this one and its checker plugins (see
+      # ANALYSIS_BINDIR in src/Makefile).  Not allowed to fail the job: the
+      # iOS builds must not depend on a download that only analysis needs.
+      - name: Install the static analyzer for the iOS jobs
+        continue-on-error: true
+        run: make -C src install-analysis-deps clangsa
+
       - name: Publish the host julia
         run: tar -czf "$RUNNER_TEMP/host-usr.tar.gz" usr stdlib/*-*/
       - uses: actions/upload-artifact@v4
@@ -573,6 +581,25 @@ jobs:
             echo "::error::tier 2 exited 0 without reporting $want/$want passed"
             exit 1
           }
+
+      # The same analyzers upstream runs on its own configuration (clang
+      # static analyzer, the GC rooting checker, clang-tidy), over every
+      # translation unit as the iOS build compiles it -- which is the only way
+      # the `_OS_IOS_` regions are analyzed at all.  -k so that one run lists
+      # every finding; the full output goes into the uploaded artifact.
+      - name: Static analysis of the iOS configuration
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          log="$PWD/ios-out/ios-analyze.log"
+          if ! make -C build-ios-sim/src -k -j "$NPROC" --output-sync \
+                 IOS=1 IOS_PLATFORM=iphonesimulator analyze > "$log" 2>&1; then
+            echo "::group::analyzer errors"
+            sed $'s/\x1b\\[[0-9;]*m//g' "$log" \
+              | grep -E 'error: |\*\*\* |is missing' | awk '!seen[$0]++' | head -150 || true
+            echo "::endgroup::"
+            exit 1
+          fi
+          echo "analyzed $(grep -c ANALYZE "$log") targets with no findings"
 
       # Leave the runner's simulator as we found it; `delete` would remove a
       # device from the image, so only shut down.

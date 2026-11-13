@@ -462,9 +462,10 @@ JL_DLLEXPORT void *jl_load_dynamic_library(const char *modname, unsigned flags, 
     if (!abspath) {
         const char *leaf = strrchr(modname, '/');
         leaf = (leaf == NULL) ? modname : leaf + 1;
-        size_t blen = strlen(leaf);
-        char *base = (char*)malloc_s(blen + 1);
-        memcpy(base, leaf, blen + 1);
+        char *base = strdup(leaf);
+        if (base == NULL)
+            jl_throw(jl_memory_exception);
+        size_t blen = strlen(base);
         if (blen > 6 && strcmp(base + blen - 6, ".dylib") == 0)
             base[blen - 6] = '\0';
         // strip trailing numeric version components: "libgit2.1.6" -> "libgit2"
