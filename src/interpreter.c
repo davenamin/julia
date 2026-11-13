@@ -372,7 +372,10 @@ static jl_value_t *eval_value(jl_value_t *e, interpreter_state *s)
         int gc_safe = 0;
         if (jl_is_tuple(jlcc)) {
             cc = (jl_sym_t*)jl_get_nth_field_noalloc(jlcc, 0);
-            gc_safe = jl_nfields(jlcc) > 2 && jl_unbox_bool(jl_get_nth_field_noalloc(jlcc, 2));
+            // gc_safe is a Bool stored inline in the tuple, not a boxed field.
+            jl_datatype_t *cct = (jl_datatype_t*)jl_typeof(jlcc);
+            gc_safe = jl_datatype_nfields(cct) > 2 && jl_field_type(cct, 2) == (jl_value_t*)jl_bool_type &&
+                *(uint8_t*)((char*)jlcc + jl_field_offset(cct, 2)) != 0;
         }
         size_t nccallargs = jl_is_svec(at) ? jl_svec_len(at) : 0;
         // Roots: the callee and its library, the arguments, and the
