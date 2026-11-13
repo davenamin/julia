@@ -171,7 +171,10 @@ jobs:
           attempt_timeout=$((50 * 60))
 
           for attempt in 1 2 3; do
-              ( set -o pipefail; make JULIA_PRECOMPILE=0 VERBOSE=1 2>&1 | tee "$log" ) &
+              # `generic`, not the default `native`: the iOS jobs run this
+              # julia on other runners, and one with an older CPU rejects an
+              # image built for this one.
+              ( set -o pipefail; make JULIA_PRECOMPILE=0 JULIA_CPU_TARGET=generic VERBOSE=1 2>&1 | tee "$log" ) &
               build_pid=$!
 
               # Watch it from the foreground rather than backgrounding a
