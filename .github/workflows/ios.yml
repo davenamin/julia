@@ -438,6 +438,16 @@ jobs:
             exit 1
           fi
 
+      # The cache action only saves when the whole job passes, so a failure in
+      # a later step would throw away hours of dependency build.  Save as soon
+      # as the build itself has succeeded.
+      - name: Save the iOS dependency prefix
+        if: steps.iosdeps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build-ios-sim/usr
+          key: ${{ steps.iosdeps.outputs.cache-primary-key }}
+
       - name: Sysimage size
         run: |
           sz=$(stat -f%z build-ios-sim/usr/lib/julia/sys.dylib)
@@ -481,6 +491,7 @@ jobs:
           file "$PWD/iostests"
 
       - name: Boot a simulator
+        id: boot
         run: |
           udid=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['udid'] for r,v in d.items() if 'iOS' in r for x in v if x.get('isAvailable')))")
           echo "using simulator $udid"
@@ -544,7 +555,7 @@ jobs:
       # something tier 2 would not hit at all — so getting both signals from
       # one run is worth more than stopping at the first.
       - name: "Tier 2: Julia's test suite under the interpreter"
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.boot.outcome == 'success' }}
         env:
           TIER2_TESTS: "goto some ordering osutils version meta"
         run: |

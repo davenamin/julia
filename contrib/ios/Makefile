@@ -130,12 +130,13 @@ $(IOS_FWKS_ROOT)/$(IOS_FRAMEWORK_HEADERS)/$(IOS_FRAMEWORK_NAME).h: | $(framework
 	@echo '#include <$(IOS_FRAMEWORK_NAME)/julia/uv.h>' >> $@
 
 # Copy public headers (including uv/ subdirectory that uv.h #includes).
+# julia.h includes jl_exported_data.inc, so the .inc files are public too.
 # Headers inside uv/ (e.g. unix.h) include siblings with a "uv/" prefix
 # (e.g. #include "uv/threadpool.h") which won't resolve when the file is
 # already inside the uv/ directory.  Strip the prefix so they find siblings
 # directly, while uv.h at the parent level keeps its "uv/" includes intact.
 install-headers: | $(framework_destdirs)
-	cp $(build_includedir)/julia/*.h $(IOS_FWKS_ROOT)/$(IOS_FRAMEWORK_HEADERS)/julia/
+	cp $(build_includedir)/julia/*.h $(build_includedir)/julia/*.inc $(IOS_FWKS_ROOT)/$(IOS_FRAMEWORK_HEADERS)/julia/
 	cp $(build_includedir)/julia/uv/*.h $(IOS_FWKS_ROOT)/$(IOS_FRAMEWORK_HEADERS)/julia/uv/
 	sed -i '' -E 's|#[[:space:]]*include "uv/|#include "|g' $(IOS_FWKS_ROOT)/$(IOS_FRAMEWORK_HEADERS)/julia/uv/*.h
 
