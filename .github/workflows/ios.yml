@@ -594,11 +594,14 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           log="$PWD/ios-out/ios-analyze.log"
-          if ! make -C build-ios-sim/src -k -j "$NPROC" --output-sync \
+          # No --output-sync: make older than 4.0, which macOS ships, rejects it.
+          if ! make -C build-ios-sim/src -k -j "$NPROC" \
                  IOS=1 IOS_PLATFORM=iphonesimulator analyze > "$log" 2>&1; then
             echo "::group::analyzer errors"
             sed $'s/\x1b\\[[0-9;]*m//g' "$log" \
-              | grep -E 'error: |\*\*\* |is missing' | awk '!seen[$0]++' | head -150 || true
+              | grep -E 'error: |\*\*\* |is missing' | awk '!seen[$0]++' | head -150 > "$log.errors" || true
+            # Whatever failed without an error line still has to be visible.
+            if [ -s "$log.errors" ]; then cat "$log.errors"; else tail -n 40 "$log"; fi
             echo "::endgroup::"
             exit 1
           fi
