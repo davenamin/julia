@@ -37,6 +37,11 @@
 #if defined(_OS_IOS_)
 #  define JL_CCALL_FFI 1
 #  include <ffi.h>
+// ffi_call reaches no safepoint of its own, and the interpreter calls it
+// inside a GC-safe region for `gc_safe` foreign calls.  ffi.h is not a system
+// header here, so say so for the GC checker; the call binds to this, the
+// latest declaration.
+void ffi_call(ffi_cif *cif, void (*fn)(void), void *rvalue, void **avalue) JL_NOTSAFEPOINT;
 #else
 #  define JL_CCALL_FFI 0
 #endif
