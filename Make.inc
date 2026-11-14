@@ -1977,9 +1977,14 @@ endif
 CLANGSA_FLAGS :=
 CLANGSA_CXXFLAGS :=
 ifeq ($(IOS), 1)
-# Analyze what the iOS build compiles: the target flags live on $(CC) there,
-# which the analyzer rules do not use.
- CLANGSA_FLAGS += $(IOS_TARGET_FLAGS)
+# Analyze what the iOS build compiles.  The target flags live on $(CC) there,
+# and definitions such as -DLLVMLIBUNWIND are appended to JCPPFLAGS; the
+# analyzer rules use neither, only JCPPFLAGS_CLANG.
+ CLANGSA_FLAGS += $(IOS_TARGET_FLAGS) $(filter -D%,$(filter-out $(JCPPFLAGS_CLANG),$(JCPPFLAGS)))
+# Against libc++ the leak checker reports every `std::unique_ptr<T>(new T)`,
+# in LLVM's own headers as much as in src/, as a leak of the pointer's
+# `__ptr_` field.
+ CLANGSA_CXXFLAGS += -Xanalyzer -analyzer-disable-checker=cplusplus.NewDeleteLeaks
 else ifeq ($(OS), Darwin) # on new XCode, the files are hidden
  CLANGSA_FLAGS += -isysroot $(shell xcrun --show-sdk-path --sdk macosx)
 endif

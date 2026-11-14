@@ -308,7 +308,12 @@ jobs:
       # iOS builds must not depend on a download that only analysis needs.
       - name: Install the static analyzer for the iOS jobs
         continue-on-error: true
-        run: make -C src install-analysis-deps clangsa
+        # Two invocations: MAKEFLAGS carries -j here, and in one the plugins
+        # are compiled while the clang headers they need are still unpacking.
+        run: |
+          make -C src install-analysis-deps
+          make -C src clangsa
+          ls -l usr/lib/lib*Plugin.dylib
 
       - name: Publish the host julia
         run: tar -czf "$RUNNER_TEMP/host-usr.tar.gz" usr stdlib/*-*/
